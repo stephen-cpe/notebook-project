@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 from typing import Any
 
 from flask import (
@@ -55,8 +57,6 @@ def create_notebook() -> ViewReturn:
 @login_required
 def open_notebook(notebook_id: int) -> ViewReturn:
     """Open the 3-panel notebook view."""
-    import json
-
     from flask import current_app
 
     notebook = require_owner(notebook_id)
@@ -65,10 +65,8 @@ def open_notebook(notebook_id: int) -> ViewReturn:
     sources = source_repo.list_by_notebook(notebook_id)
     suggested_questions: list[str] = []
     if notebook.suggested_questions:
-        try:
+        with contextlib.suppress(json.JSONDecodeError, TypeError):
             suggested_questions = json.loads(notebook.suggested_questions)
-        except (json.JSONDecodeError, TypeError):
-            pass
     cfg = current_app.config["NOTEBOOK_CONFIG"]
     return render_template(
         "notebook.html",

@@ -133,10 +133,7 @@ def _extract_utterances_structural(text: str) -> list[dict[str, str]]:
         host = _normalize_host(m.group(1))
         start = m.end()
         # Find the end: next host marker, or closing of this utterance object.
-        if i + 1 < len(matches):
-            end = matches[i + 1].start()
-        else:
-            end = len(text)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = text[start:end]
         # Strip trailing `"}`, `"},`, `"}]`, etc.
         chunk = re.sub(r'\s*"\s*\}[\s,\]]*$', "", chunk)

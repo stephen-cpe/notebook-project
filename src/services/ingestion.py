@@ -202,7 +202,8 @@ class IngestionService:
             )
         except Exception:
             logger.exception(
-                "Ingestion failed after collection creation for hash %s; cleaning up partial collection.",
+                "Ingestion failed after collection creation for hash %s; "
+                "cleaning up partial collection.",
                 content_hash[:12],
             )
             self._vector_store.delete_collection(content_hash)

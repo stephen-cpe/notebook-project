@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from src.extensions import db
 from src.models import ChatMessage, Notebook, Source, User
 from src.services.auth_service import hash_password

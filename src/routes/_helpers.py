@@ -31,7 +31,7 @@ def require_admin(f: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator: abort 403 if the current user is not an admin."""
 
     @wraps(f)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    def wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
         if not current_user.is_authenticated or not getattr(current_user, "is_admin", False):
             abort(403)
         return f(*args, **kwargs)

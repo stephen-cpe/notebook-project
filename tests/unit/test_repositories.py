@@ -163,7 +163,7 @@ class TestChatRepo:
 class TestContentRegistryRepo:
     def test_create_and_get(self, app: object) -> None:
         with app.app_context():
-            entry = content_registry_repo.create_entry("hash1", "doc_hash1", "text", 4)
+            content_registry_repo.create_entry("hash1", "doc_hash1", "text", 4)
             fetched = content_registry_repo.get_by_hash("hash1")
             assert fetched is not None
             assert fetched.extracted_text == "text"

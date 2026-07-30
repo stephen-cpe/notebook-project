@@ -287,7 +287,9 @@ class _HfInferenceBackend:
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         out: list[list[float]] = []
         for t in texts:
-            vec = self._call_with_retry(lambda: self._client.feature_extraction(t, normalize=True))
+            vec = self._call_with_retry(
+                lambda t=t: self._client.feature_extraction(t, normalize=True)
+            )
             out.append(self._flatten(vec))
         return out
 

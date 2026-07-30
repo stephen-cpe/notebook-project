@@ -70,7 +70,7 @@ def _load_fonts() -> tuple[Any, Any, Any]:
     return font_heading, font_bullet, font_subtitle
 
 
-def _wrap_text(text: str, font: Any, max_width: int) -> list[str]:
+def _wrap_text(text: str, font: Any, max_width: int) -> list[str]:  # noqa: ANN401
     """Wrap text to fit within max_width pixels."""
     words = text.split()
     if not words:
@@ -255,8 +255,8 @@ class VideoService:
             ]
             Path(audio_concat).write_text("\n".join(audio_lines), encoding="utf-8")
 
-            subprocess.run(
-                [
+            subprocess.run(  # noqa: S603
+                [  # noqa: S607
                     "ffmpeg",
                     "-y",
                     "-f",
@@ -288,8 +288,8 @@ class VideoService:
             )
             Path(audio_concat).unlink(missing_ok=True)
         else:
-            subprocess.run(
-                [
+            subprocess.run(  # noqa: S603
+                [  # noqa: S607
                     "ffmpeg",
                     "-y",
                     "-f",
@@ -316,8 +316,8 @@ class VideoService:
     @staticmethod
     def _get_audio_duration(path: str) -> float:
         try:
-            result = subprocess.run(
-                [
+            result = subprocess.run(  # noqa: S603
+                [  # noqa: S607
                     "ffprobe",
                     "-v",
                     "error",

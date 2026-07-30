@@ -63,7 +63,7 @@ def list_users() -> tuple[Response, int]:
 @admin_bp.post("/users/<int:user_id>/disable")
 @login_required
 @require_admin
-def disable_user(user_id: int) -> Any:
+def disable_user(user_id: int) -> Any:  # noqa: ANN401
     """Disable a user by changing their role to 'disabled' (admin only)."""
     user = user_repo.get_by_id(user_id)
     if user is None:
@@ -81,7 +81,7 @@ def disable_user(user_id: int) -> Any:
 @admin_bp.post("/users/<int:user_id>/enable")
 @login_required
 @require_admin
-def enable_user(user_id: int) -> Any:
+def enable_user(user_id: int) -> Any:  # noqa: ANN401
     """Re-enable a disabled user (admin only)."""
     user = user_repo.get_by_id(user_id)
     if user is None:

@@ -126,7 +126,7 @@ class RAGRetriever:
             src = db.session.query(Source).filter_by(content_hash=content_hash).first()
             if src is not None:
                 return src.filename
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         return "unknown"
 
