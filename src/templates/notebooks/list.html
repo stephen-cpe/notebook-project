@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}My notebooks &middot; notebook-project{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+      <h2 class="mb-0">My notebooks</h2>
+    </div>
+
+    <!-- Create notebook form -->
+    <div class="card bg-body-tertiary border-secondary mb-4">
+      <div class="card-body">
+        <form method="post" action="{{ url_for('notebooks.create_notebook') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-2">
+            <label for="name" class="form-label">Notebook name</label>
+            <input type="text" class="form-control" id="name" name="name"
+                   maxlength="120" required placeholder="e.g. Machine Learning Research">
+          </div>
+          <div class="mb-3">
+            <label for="description" class="form-label">Description (optional)</label>
+            <input type="text" class="form-control" id="description" name="description"
+                   maxlength="500" placeholder="What is this notebook about?">
+          </div>
+          <button type="submit" class="btn btn-info"><i class="bi bi-plus-lg"></i> Create notebook</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Notebook list -->
+    {% if notebooks %}
+      <div class="list-group">
+        {% for nb in notebooks %}
+          <div class="list-group-item list-group-item-action bg-body-tertiary border-secondary d-flex justify-content-between align-items-center">
+            <div>
+              <a href="{{ url_for('notebooks.open_notebook', notebook_id=nb.id) }}"
+                 class="text-decoration-none fw-medium">{{ nb.name }}</a>
+              {% if nb.description %}
+                <div class="text-secondary small">{{ nb.description }}</div>
+              {% endif %}
+              <div class="text-secondary small">
+                Sources: {{ nb.sources|length }} &middot; Created {{ nb.created_at.strftime('%Y-%m-%d') if nb.created_at else 'unknown' }}
+              </div>
+            </div>
+            <form method="post" action="{{ url_for('notebooks.delete_notebook', notebook_id=nb.id) }}"
+                  class="d-inline"
+                  onsubmit="return confirm('Delete this notebook and all its sources?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-trash"></i></button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="text-secondary">No notebooks yet. Create one above to get started.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

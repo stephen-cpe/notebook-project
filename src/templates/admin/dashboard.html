@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Admin · notebook-project{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-10">
+    <h2 class="mb-4">Admin Dashboard</h2>
+
+    <div class="card bg-body-tertiary border-secondary mb-4">
+      <div class="card-body">
+        <h5 class="card-title">Users</h5>
+        <div class="table-responsive">
+          <table class="table table-dark table-hover">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Notebooks</th>
+                <th>Sources</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for u in users %}
+              <tr>
+                <td>{{ u.id }}</td>
+                <td>{{ u.username }}</td>
+                <td>
+                  <span class="badge bg-{{ 'info' if u.role == 'admin' else 'warning' if u.role == 'disabled' else 'secondary' }}">{{ u.role }}</span>
+                </td>
+                <td>{{ u.notebook_count }}</td>
+                <td>{{ u.source_count }}</td>
+                <td class="small">{{ u.created_at.strftime('%Y-%m-%d') if u.created_at else '' }}</td>
+                <td>
+                  {% if u.role == 'disabled' %}
+                    <form method="post" action="{{ url_for('admin.enable_user', user_id=u.id) }}" class="d-inline">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit" class="btn btn-success btn-sm">Enable</button>
+                    </form>
+                  {% elif u.role != 'admin' %}
+                    <form method="post" action="{{ url_for('admin.disable_user', user_id=u.id) }}" class="d-inline"
+                          onsubmit="return confirm('Disable user {{ u.username }}?')">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <button type="submit" class="btn btn-outline-danger btn-sm">Disable</button>
+                    </form>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

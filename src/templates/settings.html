@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Settings · notebook-project{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <h2 class="mb-4">Settings</h2>
+
+    <form method="post" id="settings-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="avatar" id="avatar-input" value="{{ current_user.avatar }}">
+
+      <section class="settings-card">
+        <h2 class="settings-heading">Change Profile Picture</h2>
+        <div class="profile-row">
+          <button type="button" id="open-avatar-modal" class="avatar-button" aria-label="Change profile picture">
+            <img src="{{ url_for('static', filename='images/avatars/' ~ current_user.avatar) }}"
+                 alt="Current avatar"
+                 class="profile-avatar"
+                 id="current-avatar-img">
+          </button>
+          <span class="profile-hint">Click your avatar to choose a new one</span>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h2 class="settings-heading">Audio Overview Speakers</h2>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label for="audio_speaker_a" class="form-label">Speaker A</label>
+            <select class="form-select" id="audio_speaker_a" name="audio_speaker_a">
+              {% for s in speakers %}
+                <option value="{{ s }}" {% if s == current_user.audio_speaker_a %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label for="audio_speaker_b" class="form-label">Speaker B</label>
+            <select class="form-select" id="audio_speaker_b" name="audio_speaker_b">
+              {% for s in speakers %}
+                <option value="{{ s }}" {% if s == current_user.audio_speaker_b %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-card">
+        <h2 class="settings-heading">Video Overview Speaker</h2>
+        <div class="row">
+          <div class="col-md-6">
+            <label for="video_speaker" class="form-label">Speaker</label>
+            <select class="form-select" id="video_speaker" name="video_speaker">
+              {% for s in speakers %}
+                <option value="{{ s }}" {% if s == current_user.video_speaker %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </section>
+
+      {% if voice_enabled %}
+      <section class="settings-card">
+        <h2 class="settings-heading">Voice Conversation Speaker</h2>
+        <div class="row">
+          <div class="col-md-6">
+            <label for="voice_speaker" class="form-label">Speaker</label>
+            <select class="form-select" id="voice_speaker" name="voice_speaker">
+              {% for s in speakers %}
+                <option value="{{ s }}" {% if s == current_user.voice_speaker %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+      </section>
+      {% endif %}
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-info">Save Settings</button>
+        <a href="{{ url_for('notebooks.list_notebooks') }}" class="btn btn-outline-secondary">Back</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="avatar-modal-overlay" id="avatar-modal" hidden>
+  <div class="avatar-modal" role="dialog" aria-modal="true" aria-labelledby="avatar-modal-title">
+    <div class="avatar-modal-header">
+      <h3 id="avatar-modal-title">Select Your Avatar</h3>
+      <button type="button" class="avatar-modal-close" id="close-avatar-modal" aria-label="Close">&times;</button>
+    </div>
+    <div class="avatar-grid" id="avatar-grid">
+      {% for avatar in avatars %}
+        <button type="button"
+                class="avatar-cell {% if avatar == current_user.avatar %}is-selected{% endif %}"
+                data-avatar="{{ avatar }}"
+                aria-label="Select {{ avatar }}">
+          <img src="{{ url_for('static', filename='images/avatars/' ~ avatar) }}" alt="{{ avatar }}">
+        </button>
+      {% endfor %}
+    </div>
+    <div class="avatar-modal-footer">
+      <button type="button" class="btn btn-info" id="confirm-avatar">Select</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+{% endblock %}

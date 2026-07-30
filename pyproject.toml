@@ -1,0 +1,89 @@
+[project]
+name = "notebook-project"
+version = "0.1.0"
+description = "A Flask + PostgreSQL + ChromaDB RAG application with source-grounded chat, audio/video overviews, and voice conversation."
+requires-python = ">=3.13"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+# ---------------------------------------------------------------------------
+# Ruff (lint + format)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM", "N", "ANN", "S", "A", "PT"]
+ignore = [
+    "S101",    # assert usage in tests is fine
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "ANN", "PT"]
+"migrations/**" = ["E", "F", "W", "I", "ANN"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+# ---------------------------------------------------------------------------
+# Mypy (strict)
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.13"
+strict = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+warn_return_any = true
+# flask_login decorators (@login_required, @user_loader) are untyped; not actionable.
+disable_error_code = ["untyped-decorator"]
+exclude = ["migrations", "data"]
+
+[[tool.mypy.overrides]]
+module = [
+    "chromadb.*",
+    "sentence_transformers.*",
+    "edge_tts.*",
+    "pydub.*",
+    "pdf2image.*",
+    "pptx.*",
+    "docx.*",
+    "pypdf.*",
+    "tiktoken.*",
+    "ollama.*",
+    "flask_login.*",
+    "flask_migrate.*",
+    "flask_wtf.*",
+    "torch.*",
+    "transformers.*",
+    "flask_socketio.*",
+    "faster_whisper.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: requires real network/services (skipped unless RUN_INTEGRATION=1)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:flask.*",
+    "ignore::DeprecationWarning:flask_sqlalchemy.*",
+]

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Log in &middot; notebook-project{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-5">
+    <div class="card bg-body-tertiary border-secondary">
+      <div class="card-body p-4">
+        <h3 class="card-title mb-4">Log in</h3>
+        <form method="post" action="{{ url_for('auth.login') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="mb-3">
+            <label for="username" class="form-label">Username</label>
+            <input type="text" class="form-control" id="username" name="username"
+                   maxlength="120" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label for="password" class="form-label">Password</label>
+            <input type="password" class="form-control" id="password" name="password" required>
+          </div>
+          <button type="submit" class="btn btn-info w-100">Log in</button>
+          <p class="text-center text-secondary small mt-3">
+            No account? <a href="{{ url_for('auth.signup_form') }}">Sign up</a>
+          </p>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

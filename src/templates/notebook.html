@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}{{ notebook.name }} &middot; notebook-project{% endblock %}
+{% block content %}
+<div class="row g-3" id="notebook-app" data-notebook-id="{{ notebook.id }}">
+  <!-- Sources panel (left) -->
+  <div class="col-md-3 border-end border-secondary" id="sources-panel">
+    <h5 class="mb-3">Sources</h5>
+    <div id="source-list" class="mb-3">
+      {% if sources %}
+        {% for s in sources %}
+          <div class="border border-secondary rounded mb-2 p-2 small" data-source-id="{{ s.id }}">
+            <div class="d-flex align-items-center justify-content-between">
+              <span class="fw-medium source-filename" data-source-id="{{ s.id }}">{{ s.filename }}</span>
+              <span class="badge bg-{% if s.status == 'ready' %}success{% elif s.status == 'failed' %}danger{% elif s.status == 'partial' %}warning{% else %}secondary{% endif %} ms-1">{{ s.status }}</span>
+            </div>
+            <div class="mt-1 d-flex gap-1">
+              <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 source-view-btn" data-source-id="{{ s.id }}" title="View extracted text">
+                <i class="bi bi-file-text"></i>
+              </button>
+              <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 source-rename-btn" data-source-id="{{ s.id }}" title="Rename source">
+                <i class="bi bi-pencil"></i>
+              </button>
+              <button type="button" class="btn btn-outline-danger btn-sm py-0 px-1 source-delete-btn" data-source-id="{{ s.id }}" data-source-name="{{ s.filename }}" title="Delete source">
+                <i class="bi bi-trash"></i>
+              </button>
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <p class="text-secondary small">No sources uploaded yet.</p>
+      {% endif %}
+    </div>
+
+    <!-- Upload: drag-and-drop + multi-file -->
+    <div id="drop-zone" class="border border-secondary border-dashed rounded p-3 text-center mb-2" style="cursor: pointer;">
+      <i class="bi bi-cloud-arrow-up fs-3 text-secondary"></i>
+      <p class="small text-secondary mb-0">Drag files here or click to select</p>
+      <p class="small text-secondary">PDF, DOCX, PPTX, TXT, MD</p>
+      <input type="file" id="file-input" class="d-none" name="files"
+             accept=".pdf,.docx,.pptx,.txt,.md" multiple>
+    </div>
+    <div id="upload-progress" class="mb-2"></div>
+    <button type="button" id="upload-btn" class="btn btn-info btn-sm w-100" disabled>
+      <i class="bi bi-upload"></i> Upload
+    </button>
+  </div>
+
+  <!-- Chat panel (center) -->
+  <div class="col-md-6" id="chat-panel">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="mb-0">Chat</h5>
+      <button id="chat-clear" class="btn btn-outline-secondary btn-sm" title="Clear chat history">
+        <i class="bi bi-trash"></i> Clear
+      </button>
+    </div>
+    <div id="chat-messages" class="border border-secondary rounded p-3 mb-3" style="min-height: 300px; max-height: 60vh; overflow-y: auto;">
+      {% if notebook.summary %}
+        <div class="text-secondary small mb-3">
+          <strong>Summary:</strong> {{ notebook.summary }}
+        </div>
+        {% if suggested_questions %}
+          <div class="mb-3" id="suggested-questions">
+            <strong class="small">Suggested questions:</strong>
+            <ul class="small list-unstyled mt-1">
+              {% for q in suggested_questions %}
+                <li class="mb-1">
+                  <a href="#" class="suggested-question text-info text-decoration-none" data-question="{{ q }}">{{ q }}</a>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="text-secondary small">Upload sources and start asking questions.</p>
+      {% endif %}
+    </div>
+    <div class="input-group">
+      <textarea id="chat-input" class="form-control" rows="2" placeholder="Ask a question about your sources..."></textarea>
+      {% if voice_enabled %}
+      <button id="voice-mic" class="btn btn-outline-info" title="Press and hold to talk (release to send)" aria-label="Push to talk">
+        <i class="bi bi-mic"></i>
+      </button>
+      {% endif %}
+      <button id="chat-send" class="btn btn-info">Send</button>
+    </div>
+    {% if voice_enabled %}
+    <div id="voice-status" class="small text-secondary mt-1" aria-live="polite"></div>
+    {% endif %}
+  </div>
+
+  <!-- Config panel (right) -->
+  <div class="col-md-3 border-start border-secondary" id="config-panel">
+    <h5 class="mb-3">Notebook</h5>
+    <p class="small text-secondary">{{ notebook.description or 'No description' }}</p>
+    <p class="small">Sources: {{ sources|length }}</p>
+    <hr class="border-secondary">
+    <h6 class="small text-secondary">Overview</h6>
+    <input type="text" id="overview-topic" class="form-control form-control-sm mb-2" placeholder="Focus topic (optional)">
+    <div class="d-flex gap-2 mb-2">
+      <button id="audio-generate" class="btn btn-audio btn-sm flex-fill">
+        <i class="bi bi-mic"></i> {% if notebook.audio_status == 'ready' %}Regen Audio{% else %}Audio{% endif %}
+      </button>
+      <button id="video-generate" class="btn btn-video btn-sm flex-fill">
+        <i class="bi bi-camera-video"></i> {% if notebook.video_status == 'ready' %}Regen Video{% else %}Video{% endif %}
+      </button>
+    </div>
+    <div id="audio-player">
+      {% if notebook.audio_status == 'ready' and notebook.audio_path %}
+        <audio controls class="w-100 mt-2"><source src="{{ url_for('audio.audio_file', notebook_id=notebook.id) }}" type="audio/mpeg"></audio>
+        <button id="audio-delete" class="btn btn-outline-danger btn-sm mt-2 w-100"><i class="bi bi-trash"></i> Delete Audio</button>
+      {% endif %}
+    </div>
+    <div id="video-player" class="mt-2">
+      {% if notebook.video_status == 'ready' and notebook.video_path %}
+        <video controls class="w-100"><source src="{{ url_for('video.video_file', notebook_id=notebook.id) }}" type="video/mp4"></video>
+        <button id="video-delete" class="btn btn-outline-danger btn-sm mt-2 w-100"><i class="bi bi-trash"></i> Delete Video</button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<!-- Source text modal -->
+<div class="modal fade" id="sourceTextModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="source-text-title">Extracted Text</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <pre id="source-text-content" class="small" style="white-space: pre-wrap; word-wrap: break-word;">Loading...</pre>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script type="application/json" id="nb-config">
+{"notebook_id": {{ notebook.id }}, "csrf_token": "{{ csrf_token() }}", "voice_enabled": {{ voice_enabled | tojson }}, "voice_max_recording_seconds": {{ voice_max_recording_seconds | default(60) }}}
+</script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% if voice_enabled %}
+<script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js" crossorigin="anonymous"></script>
+<script src="{{ url_for('static', filename='js/voice.js') }}"></script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,3 @@
+TXT fixture document.
+Plain text about databases, SQL, and NoSQL stores.
+PostgreSQL, MongoDB, and Redis are common choices.
