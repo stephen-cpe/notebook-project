@@ -147,6 +147,11 @@ class TestMockChat:
         client = OllamaClient()
         assert client.model == "gemma4:31b-cloud"
 
+    def test_no_user_message_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AI_MOCK", "true")
+        client = OllamaClient()
+        assert client._extract_user_content([{"role": "system", "content": "sys"}]) == ""
+
 
 # ---------------------------------------------------------------------------
 # Mock stream
@@ -268,6 +273,155 @@ class TestGetClient:
         client = get_ollama_client()
         assert isinstance(client, OllamaClient)
         assert client.model == "gemma4:31b-cloud"
+
+
+# ---------------------------------------------------------------------------
+# Real HTTP paths (requests.post mocked, offline)
+# ---------------------------------------------------------------------------
+
+
+def _real_client(monkeypatch: pytest.MonkeyPatch) -> OllamaClient:
+    monkeypatch.setenv("AI_MOCK", "false")
+    monkeypatch.setenv("OLLAMA_CLOUD_BASE_URL", "https://ollama.example")
+    monkeypatch.setenv("OLLAMA_CLOUD_API_KEY", "secret-key")
+    monkeypatch.setenv("OLLAMA_TIMEOUT", "30")
+    return OllamaClient()
+
+
+class _FakeResp:
+    def __init__(self, *, status_code: int = 200, text: str = "", json: object = None, lines: list[str] | None = None, headers: object = None) -> None:
+        self.status_code = status_code
+        self.text = text
+        self._json = json
+        self._lines = lines
+        self.headers = headers if headers is not None else {}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            from requests import HTTPError
+
+            raise HTTPError(f"HTTP {self.status_code}")
+
+    def json(self) -> object:
+        if self._json is None:
+            raise ValueError("no json")
+        return self._json
+
+    def iter_lines(self, decode_unicode: bool = False) -> list[str]:  # noqa: ARG002
+        return self._lines if self._lines is not None else []
+
+
+class TestRealChat:
+    def test_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        resp = _FakeResp(json={"message": {"content": "<|channel|thought\nno\n<channel|>Hello!"}})
+        with patch("src.services.ollama_client.requests.post", return_value=resp) as mock_post:
+            result = client.chat([{"role": "user", "content": "hi"}])
+        assert result == "Hello!"
+        assert mock_post.call_count == 1
+        url = mock_post.call_args.args[0]
+        assert url == "https://ollama.example/api/chat"
+        headers = mock_post.call_args.kwargs["headers"]
+        assert headers["Authorization"] == "Bearer secret-key"
+
+    def test_no_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AI_MOCK", "false")
+        monkeypatch.setenv("OLLAMA_CLOUD_BASE_URL", "https://ollama.example")
+        monkeypatch.setenv("OLLAMA_CLOUD_API_KEY", "")
+        monkeypatch.setenv("OLLAMA_TIMEOUT", "30")
+        client = OllamaClient()
+        resp = _FakeResp(json={"message": {"content": "plain answer"}})
+        with patch("src.services.ollama_client.requests.post", return_value=resp) as mock_post:
+            result = client.chat([{"role": "user", "content": "hi"}])
+        assert result == "plain answer"
+        assert "Authorization" not in mock_post.call_args.kwargs["headers"]
+
+    def test_timeout_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        from requests import Timeout
+
+        with (
+            patch("src.services.ollama_client.requests.post", side_effect=Timeout("t")),
+            pytest.raises(Exception) as excinfo,
+        ):
+            client.chat([{"role": "user", "content": "hi"}])
+        assert "timed out" in str(excinfo.value)
+
+    def test_connection_error_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        from requests import ConnectionError as ReqConnError
+
+        with (
+            patch("src.services.ollama_client.requests.post", side_effect=ReqConnError("down")),
+            pytest.raises(Exception) as excinfo,
+        ):
+            client.chat([{"role": "user", "content": "hi"}])
+        assert "unreachable" in str(excinfo.value)
+
+    def test_http_error_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        resp = _FakeResp(status_code=500, text="boom")
+        with (
+            patch("src.services.ollama_client.requests.post", return_value=resp),
+            pytest.raises(Exception) as excinfo,
+        ):
+            client.chat([{"role": "user", "content": "hi"}])
+        assert "HTTP 500" in str(excinfo.value)
+
+    def test_retries_after_connection_error_then_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        from requests import ConnectionError as ReqConnError
+
+        calls = 0
+
+        def _post(*args: object, **kwargs: object) -> _FakeResp:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ReqConnError("down")
+            return _FakeResp(json={"message": {"content": "recovered"}})
+
+        with patch("src.services.ollama_client.requests.post", side_effect=_post):
+            result = client.chat([{"role": "user", "content": "hi"}])
+        assert result == "recovered"
+        assert calls == 2
+
+
+class TestRealStream:
+    def test_yields_tokens(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        lines = [
+            '{"message": {"content": "hello"}}',
+            "",
+            '{"message": {"content": " world"}}',
+            "not json",
+        ]
+        resp = _FakeResp(lines=lines)
+        with patch("src.services.ollama_client.requests.post", return_value=resp):
+            chunks = list(client.stream([{"role": "user", "content": "hi"}]))
+        assert chunks == ["hello", " world"]
+
+    def test_stream_connection_error_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        from requests import ConnectionError as ReqConnError
+
+        with (
+            patch("src.services.ollama_client.requests.post", side_effect=ReqConnError("down")),
+            pytest.raises(Exception) as excinfo,
+        ):
+            list(client.stream([{"role": "user", "content": "hi"}]))
+        assert "Stream failed after retry" in str(excinfo.value)
+
+    def test_stream_timeout_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _real_client(monkeypatch)
+        from requests import Timeout
+
+        with (
+            patch("src.services.ollama_client.requests.post", side_effect=Timeout("t")),
+            pytest.raises(Exception) as excinfo,
+        ):
+            list(client.stream([{"role": "user", "content": "hi"}]))
+        assert "timed out" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

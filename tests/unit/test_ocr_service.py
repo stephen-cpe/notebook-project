@@ -126,6 +126,30 @@ class TestRenderPdfPages:
         images = svc.render_pdf_pages(str(FIXTURES / "empty.pdf"))
         assert len(images) == 1
 
+    def test_render_passes_poppler_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import sys
+        import types
+
+        fake_pdf2image = types.ModuleType("pdf2image")
+        calls: list[dict[str, Any]] = []
+
+        def _fake_convert_from_path(path: str, **kwargs: Any) -> list[Any]:
+            calls.append({"path": path, "kwargs": kwargs})
+            img = types.SimpleNamespace(size=(10, 10))
+            return [img]
+
+        fake_pdf2image.convert_from_path = _fake_convert_from_path
+        monkeypatch.setitem(sys.modules, "pdf2image", fake_pdf2image)
+        monkeypatch.setenv("POPPLER_PATH", str(tmp_path / "poppler-bin"))
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        images = svc.render_pdf_pages("whatever.pdf")
+        assert len(images) == 1
+        assert calls[0]["path"] == "whatever.pdf"
+        assert calls[0]["kwargs"]["poppler_path"] == str(tmp_path / "poppler-bin")
+
 
 class TestOcrPdf:
     def test_ocr_pdf_mock(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,6 +168,28 @@ class TestOcrPdf:
         svc = OCRService()
         text = svc.ocr_pdf(str(FIXTURES / "sample.pdf"), OCR_PROMPT_TEXT)
         assert text == ""
+
+    def test_ocr_pdf_no_pages_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        monkeypatch.setattr(svc, "render_pdf_pages", lambda pdf_path: [])
+        assert svc.ocr_pdf("empty.pdf") == ""
+
+
+# ---------------------------------------------------------------------------
+# Mock OCR fallback prompt
+# ---------------------------------------------------------------------------
+
+
+class TestMockOcrFallbackPrompt:
+    def test_unknown_prompt_returns_generic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        result = svc.ocr_image("fake.png", "Some Custom Prompt")
+        assert result.startswith("[mock OCR ")
+        assert "recognition" not in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +354,293 @@ class TestProviderSelection:
         assert svc._backend is None  # mock path doesn't build a real backend
         # But OCR still works via the mock.
         assert svc.ocr_image("fake.png", OCR_PROMPT_TEXT) != ""
+
+
+# ---------------------------------------------------------------------------
+# _LocalTransformersOcrBackend (heavy deps mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalTransformersBackend:
+    def _fake_transformers(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        fake = types.ModuleType("transformers")
+        fake.AutoProcessor = MagicMock()
+        fake.AutoModelForImageTextToText = MagicMock()
+        monkeypatch.setitem(sys.modules, "transformers", fake)
+        return fake.AutoProcessor, fake.AutoModelForImageTextToText
+
+    def test_load_model_success(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from src.services.ocr_service import _LocalTransformersOcrBackend
+
+        processor, model = self._fake_transformers(monkeypatch)
+        caplog.set_level(logging.INFO, logger="src.services.ocr_service")
+        backend = _LocalTransformersOcrBackend(token="tok")
+        assert backend._loaded is False
+        backend._load_model()
+        assert backend._loaded is True
+        processor.from_pretrained.assert_called_once()
+        model.from_pretrained.assert_called_once()
+        assert any("Loaded GLM-OCR model" in r.message for r in caplog.records)
+
+    def test_load_model_retries_without_token_on_401(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from src.services.ocr_service import _LocalTransformersOcrBackend
+
+        processor, model = self._fake_transformers(monkeypatch)
+        processor.from_pretrained.side_effect = [
+            Exception("HTTPError 401 Unauthorized"),
+            "processor-without-token",
+        ]
+        caplog.set_level(logging.ERROR, logger="src.services.ocr_service")
+        backend = _LocalTransformersOcrBackend(token="bad-token")
+        backend._load_model()
+        assert backend._loaded is True
+        assert processor.from_pretrained.call_count == 2
+        assert model.from_pretrained.call_count == 1
+        assert any("status=401" in r.message for r in caplog.records)
+
+    def test_load_model_raises_on_other_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.services.ocr_service import _LocalTransformersOcrBackend
+
+        processor, _ = self._fake_transformers(monkeypatch)
+        processor.from_pretrained.side_effect = Exception("disk full")
+        backend = _LocalTransformersOcrBackend(token="tok")
+        with pytest.raises(Exception, match="disk full"):
+            backend._load_model()
+        assert backend._loaded is False
+
+    def test_ocr_image_runs_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        from src.services.ocr_service import _LocalTransformersOcrBackend
+
+        self._fake_transformers(monkeypatch)
+        fake_torch = types.ModuleType("torch")
+
+        class _NoGrad:
+            def __enter__(self) -> _NoGrad:
+                return self
+
+            def __exit__(self, *args: object) -> bool:
+                return False
+
+        fake_torch.no_grad = _NoGrad
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+        backend = _LocalTransformersOcrBackend(token="tok")
+        backend._loaded = True
+        backend._model = MagicMock()
+        backend._model.device = "cpu"
+        backend._processor = MagicMock()
+        inputs = {"input_ids": MagicMock()}
+        backend._processor.apply_chat_template.return_value.to.return_value = inputs
+        backend._model.generate.return_value = MagicMock()
+        backend._processor.decode.return_value = "OCR text output"
+
+        result = backend.ocr_image("image-placeholder", OCR_PROMPT_TEXT)
+        assert result == "OCR text output"
+        backend._model.generate.assert_called_once()
+        backend._processor.apply_chat_template.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _HfInferenceOcrBackend (network mocked)
+# ---------------------------------------------------------------------------
+
+
+class TestHfInferenceBackend:
+    def _fake_hub(self, monkeypatch: pytest.MonkeyPatch) -> tuple[Any, list[dict[str, Any]]]:
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        fake = types.ModuleType("huggingface_hub")
+        constructed: list[dict[str, Any]] = []
+
+        class FakeInferenceClient:
+            def __init__(self, model: str, token: str | None = None, base_url: str | None = None, timeout: int = 60) -> None:
+                constructed.append(
+                    {"model": model, "token": token, "base_url": base_url, "timeout": timeout}
+                )
+                self.chat_completion = MagicMock()
+
+        fake.InferenceClient = FakeInferenceClient
+        monkeypatch.setitem(sys.modules, "huggingface_hub", fake)
+        return fake, constructed
+
+    def test_constructs_client(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        _, constructed = self._fake_hub(monkeypatch)
+        caplog.set_level(logging.INFO, logger="src.services.ocr_service")
+        backend = _HfInferenceOcrBackend(model="m", token="tok", endpoint="https://e", timeout=42)
+        assert backend._model == "m"
+        assert constructed[0]["model"] == "m"
+        assert constructed[0]["token"] == "tok"
+        assert constructed[0]["base_url"] == "https://e"
+        assert constructed[0]["timeout"] == 42
+        assert any("Configured HF Inference API" in r.message for r in caplog.records)
+
+    def test_warns_when_no_token(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        self._fake_hub(monkeypatch)
+        caplog.set_level(logging.WARNING, logger="src.services.ocr_service")
+        _HfInferenceOcrBackend(model="m", token="")
+        assert any("HF_TOKEN is not set" in r.message for r in caplog.records)
+
+    def test_ocr_image_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import types
+        from unittest.mock import MagicMock
+
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        _, constructed = self._fake_hub(monkeypatch)
+        backend = _HfInferenceOcrBackend(model="m", token="tok")
+        reply = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="OCR result"))]
+        )
+        constructed[0]["client"] = backend._client
+        backend._client.chat_completion.return_value = reply
+
+        result = backend.ocr_image(b"\x89PNG\r\nbinary", OCR_PROMPT_TEXT)
+        assert result == "OCR result"
+        backend._client.chat_completion.assert_called_once()
+
+    def test_ocr_image_malformed_response(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import types
+
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        self._fake_hub(monkeypatch)
+        backend = _HfInferenceOcrBackend(model="m", token="tok")
+        backend._client.chat_completion.return_value = types.SimpleNamespace()
+        assert backend.ocr_image(b"raw", OCR_PROMPT_TEXT) == ""
+
+    def test_call_with_retry_rate_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import types
+        from unittest.mock import MagicMock
+
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        self._fake_hub(monkeypatch)
+        backend = _HfInferenceOcrBackend(model="m", token="tok")
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        calls = 0
+
+        def _flaky() -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise Exception("429 rate limit hit")  # noqa: TRY002
+            return "ok"
+
+        result = backend._call_with_retry(_flaky)
+        assert result == "ok"
+        assert calls == 2
+
+    def test_call_with_retry_transient_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        self._fake_hub(monkeypatch)
+        backend = _HfInferenceOcrBackend(model="m", token="tok")
+        monkeypatch.setattr("time.sleep", lambda s: None)
+
+        calls = 0
+
+        def _flaky() -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise TimeoutError("request timed out")
+            return "ok"
+
+        assert backend._call_with_retry(_flaky) == "ok"
+        assert calls == 2
+
+    def test_call_with_retry_reraises_other(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.services.ocr_service import _HfInferenceOcrBackend
+
+        self._fake_hub(monkeypatch)
+        backend = _HfInferenceOcrBackend(model="m", token="tok")
+
+        def _boom() -> str:
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            backend._call_with_retry(_boom)
+
+
+# ---------------------------------------------------------------------------
+# _pil_to_data_url + _extract_hf_status
+# ---------------------------------------------------------------------------
+
+
+class TestPilToDataUrl:
+    def test_pil_image_png(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.services.ocr_service import _pil_to_data_url
+
+        from PIL import Image
+
+        img = Image.new("RGB", (4, 4), "white")
+        url = _pil_to_data_url(img)
+        assert url.startswith("data:image/png;base64,")
+
+    def test_bytes_input(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.services.ocr_service import _pil_to_data_url
+
+        url = _pil_to_data_url(b"raw-bytes")
+        assert url == "data:application/octet-stream;base64," + "cmF3LWJ5dGVz"
+
+    def test_file_like_input(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+
+        from src.services.ocr_service import _pil_to_data_url
+
+        buf = io.BytesIO(b"file-like-data")
+        url = _pil_to_data_url(buf)
+        assert url == "data:application/octet-stream;base64," + "ZmlsZS1saWtlLWRhdGE="
+
+    def test_path_input(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from src.services.ocr_service import _pil_to_data_url
+
+        f = tmp_path / "img.bin"
+        f.write_bytes(b"path-data")
+        url = _pil_to_data_url(str(f))
+        assert url == "data:application/octet-stream;base64," + "cGF0aC1kYXRh"
+
+
+class TestExtractHfStatus:
+    def test_401_and_403(self) -> None:
+        from src.services.ocr_service import _extract_hf_status
+
+        assert _extract_hf_status(Exception("HTTP 401 Unauthorized")) == 401
+        assert _extract_hf_status(Exception("Forbidden 403")) == 403
+        assert _extract_hf_status(Exception("disk full")) is None
 
 
 # ---------------------------------------------------------------------------
