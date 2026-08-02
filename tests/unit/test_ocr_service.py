@@ -420,9 +420,7 @@ class TestLocalTransformersBackend:
             backend._load_model()
         assert backend._loaded is False
 
-    def test_ocr_image_runs_model(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_ocr_image_runs_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import sys
         import types
         from unittest.mock import MagicMock
@@ -473,7 +471,13 @@ class TestHfInferenceBackend:
         constructed: list[dict[str, Any]] = []
 
         class FakeInferenceClient:
-            def __init__(self, model: str, token: str | None = None, base_url: str | None = None, timeout: int = 60) -> None:
+            def __init__(
+                self,
+                model: str,
+                token: str | None = None,
+                base_url: str | None = None,
+                timeout: int = 60,
+            ) -> None:
                 constructed.append(
                     {"model": model, "token": token, "base_url": base_url, "timeout": timeout}
                 )
@@ -514,7 +518,6 @@ class TestHfInferenceBackend:
 
     def test_ocr_image_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import types
-        from unittest.mock import MagicMock
 
         from src.services.ocr_service import _HfInferenceOcrBackend
 
@@ -541,8 +544,6 @@ class TestHfInferenceBackend:
         assert backend.ocr_image(b"raw", OCR_PROMPT_TEXT) == ""
 
     def test_call_with_retry_rate_limited(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        import types
-        from unittest.mock import MagicMock
 
         from src.services.ocr_service import _HfInferenceOcrBackend
 
@@ -602,9 +603,9 @@ class TestHfInferenceBackend:
 
 class TestPilToDataUrl:
     def test_pil_image_png(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from src.services.ocr_service import _pil_to_data_url
-
         from PIL import Image
+
+        from src.services.ocr_service import _pil_to_data_url
 
         img = Image.new("RGB", (4, 4), "white")
         url = _pil_to_data_url(img)

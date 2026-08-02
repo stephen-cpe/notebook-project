@@ -44,6 +44,6 @@ python-dotenv==1.2.2
 # --- Dev / test ---
 pytest==9.1.1
 pytest-cov==7.1.0
-ruff==0.16.0
+ruff==0.16.1
 mypy==2.3.0
 types-requests==2.33.0.20260712

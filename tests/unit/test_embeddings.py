@@ -482,7 +482,13 @@ class TestHfInferenceBackend:
         constructed: list[dict[str, Any]] = []
 
         class FakeInferenceClient:
-            def __init__(self, model: str, token: str | None = None, base_url: str | None = None, timeout: int = 60) -> None:
+            def __init__(
+                self,
+                model: str,
+                token: str | None = None,
+                base_url: str | None = None,
+                timeout: int = 60,
+            ) -> None:
                 constructed.append(
                     {"model": model, "token": token, "base_url": base_url, "timeout": timeout}
                 )

@@ -37,7 +37,9 @@ def _set_video(app: object, notebook_id: int, path: str | None, status: str) -> 
 
 
 class TestRequestVideo:
-    def test_queues_video(self, client: object, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_queues_video(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr("src.routes.video.launch_video_job", lambda *a, **k: None)
         _login(client, app, "vidroute1")
         nb_id = _create_notebook(client, app)
@@ -106,7 +108,9 @@ class TestVideoFile:
         assert res.mimetype == "video/mp4"
         assert res.data == fake.read_bytes()
 
-    def test_serves_relative_path(self, client: object, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_serves_relative_path(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         _login(client, app, "vidroute9")
         nb_id = _create_notebook(client, app)

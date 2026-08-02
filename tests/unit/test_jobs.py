@@ -56,7 +56,9 @@ class TestLaunchAudioJob:
 
             mock_gen.assert_called_once_with(nb_id, topic="", speaker_a="Ava", speaker_b="Andrew")
 
-    def test_handles_audio_generation_error(self, app: object, caplog: pytest.LogCaptureFixture) -> None:
+    def test_handles_audio_generation_error(
+        self, app: object, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         caplog.set_level(logging.ERROR)
@@ -153,7 +155,9 @@ class TestLaunchSummaryJob:
 
         assert any("Summary job crashed" in r.message for r in caplog.records)
 
-    def test_missing_notebook_logs_error(self, app: object, caplog: pytest.LogCaptureFixture) -> None:
+    def test_missing_notebook_logs_error(
+        self, app: object, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
 
         caplog.set_level(logging.ERROR)
@@ -218,7 +222,8 @@ class TestLaunchVideoJob:
             nb_id = nb.id
 
         with patch(
-            "src.services.video_service.generate_video_for_notebook", side_effect=Exception("video boom")
+            "src.services.video_service.generate_video_for_notebook",
+            side_effect=Exception("video boom"),
         ):
             launch_video_job(nb_id, app)
             time.sleep(0.2)

@@ -8,7 +8,6 @@ The video service generates narrated slide presentations (MP4) via:
 
 from __future__ import annotations
 
-import logging
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -143,16 +142,20 @@ class TestVideoService:
         assert result.status == "failed"
         assert result.error == "No slides to render."
 
-    def test_missing_ffmpeg_returns_failed(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_ffmpeg_returns_failed(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AI_MOCK", "false")
         nb = self._make_notebook(app)
         slides = [{"type": "title", "heading": "Test", "bullets": [], "narration": "Welcome"}]
 
-        with patch("src.services.video_service._ffmpeg_available", return_value=False):
-            with app.app_context():
-                nb = db.session.merge(nb)
-                svc = VideoService()
-                result = svc.generate_video(nb, slides, "Ava")
+        with (
+            patch("src.services.video_service._ffmpeg_available", return_value=False),
+            app.app_context(),
+        ):
+            nb = db.session.merge(nb)
+            svc = VideoService()
+            result = svc.generate_video(nb, slides, "Ava")
 
         assert result.status == "failed"
         assert "ffmpeg is not installed" in (result.error or "")
@@ -274,7 +277,9 @@ class TestVideoService:
                 assert "ffmpeg" in args
                 assert not Path(output_path).with_suffix(".txt").exists()
 
-    def test_get_audio_duration_handles_error(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_get_audio_duration_handles_error(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AI_MOCK", "true")
         nb = self._make_notebook(app)
 
@@ -368,7 +373,9 @@ class TestGenerateVideoForNotebook:
         assert result.status == "failed"
         assert "No slides could be generated" in (result.error or "")
 
-    def test_updates_status_during_pipeline(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_updates_status_during_pipeline(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AI_MOCK", "true")
         monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
         monkeypatch.setenv("DATA_DIR", tempfile.gettempdir())

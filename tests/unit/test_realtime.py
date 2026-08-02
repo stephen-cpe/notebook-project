@@ -214,7 +214,12 @@ class TestRunTurn:
             _run_turn(
                 app,
                 "sid-x",
-                {"notebook_id": nb_id, "user_id": user_id, "cancelled": True, "buffer": bytearray(b"abc")},
+                {
+                    "notebook_id": nb_id,
+                    "user_id": user_id,
+                    "cancelled": True,
+                    "buffer": bytearray(b"abc"),
+                },
             )
         emit.assert_any_call("voice:done", {"state": "cancelled"}, namespace="/voice", to="sid-x")
 
@@ -228,9 +233,16 @@ class TestRunTurn:
             _run_turn(
                 app,
                 "sid-x",
-                {"notebook_id": nb_id, "user_id": user_id, "cancelled": False, "buffer": bytearray()},
+                {
+                    "notebook_id": nb_id,
+                    "user_id": user_id,
+                    "cancelled": False,
+                    "buffer": bytearray(),
+                },
             )
-        emit.assert_any_call("voice:error", {"error": "no audio received"}, namespace="/voice", to="sid-x")
+        emit.assert_any_call(
+            "voice:error", {"error": "no audio received"}, namespace="/voice", to="sid-x"
+        )
 
     def test_happy_path_streams_audio(self, app: object, tmp_path: Path) -> None:
         user_id, nb_id = _make_user_and_notebook(app)
@@ -258,16 +270,36 @@ class TestRunTurn:
             _run_turn(
                 app,
                 "sid-happy",
-                {"notebook_id": nb_id, "user_id": user_id, "cancelled": False, "buffer": bytearray(b"audio")},
+                {
+                    "notebook_id": nb_id,
+                    "user_id": user_id,
+                    "cancelled": False,
+                    "buffer": bytearray(b"audio"),
+                },
             )
 
         # Transcribe -> answer -> sources -> audio chunks -> done.
-        emit.assert_any_call("voice:status", {"state": "transcribing"}, namespace="/voice", to="sid-happy")
         emit.assert_any_call(
-            "voice:transcript", {"text": "hello world", "final": True}, namespace="/voice", to="sid-happy"
+            "voice:status", {"state": "transcribing"}, namespace="/voice", to="sid-happy"
         )
-        emit.assert_any_call("voice:answer", {"text": "The answer is in the sources.", "sources": [{"filename": "doc.txt", "page": 1}]}, namespace="/voice", to="sid-happy")
-        emit.assert_any_call("voice:status", {"state": "speaking"}, namespace="/voice", to="sid-happy")
+        emit.assert_any_call(
+            "voice:transcript",
+            {"text": "hello world", "final": True},
+            namespace="/voice",
+            to="sid-happy",
+        )
+        emit.assert_any_call(
+            "voice:answer",
+            {
+                "text": "The answer is in the sources.",
+                "sources": [{"filename": "doc.txt", "page": 1}],
+            },
+            namespace="/voice",
+            to="sid-happy",
+        )
+        emit.assert_any_call(
+            "voice:status", {"state": "speaking"}, namespace="/voice", to="sid-happy"
+        )
         emit.assert_any_call("voice:status", {"state": "done"}, namespace="/voice", to="sid-happy")
         emit.assert_any_call("voice:done", {"state": "done"}, namespace="/voice", to="sid-happy")
         # Audio bytes were emitted as binary events.
@@ -277,7 +309,9 @@ class TestRunTurn:
         user_id, nb_id = _make_user_and_notebook(app)
         emit = MagicMock()
 
-        fake_result = SimpleNamespace(error="no_speech", transcript="", answer="", sources=[], reply_audio_path=None)
+        fake_result = SimpleNamespace(
+            error="no_speech", transcript="", answer="", sources=[], reply_audio_path=None
+        )
         fake_service = MagicMock()
         fake_service.run_voice_turn.return_value = fake_result
 
@@ -289,7 +323,12 @@ class TestRunTurn:
             _run_turn(
                 app,
                 "sid-x",
-                {"notebook_id": nb_id, "user_id": user_id, "cancelled": False, "buffer": bytearray(b"audio")},
+                {
+                    "notebook_id": nb_id,
+                    "user_id": user_id,
+                    "cancelled": False,
+                    "buffer": bytearray(b"audio"),
+                },
             )
         emit.assert_any_call("voice:error", {"error": "no_speech"}, namespace="/voice", to="sid-x")
 
@@ -297,7 +336,9 @@ class TestRunTurn:
         user_id, nb_id = _make_user_and_notebook(app)
         emit = MagicMock()
 
-        fake_result = SimpleNamespace(error="tts_failed", transcript="t", answer="a", sources=[], reply_audio_path=None)
+        fake_result = SimpleNamespace(
+            error="tts_failed", transcript="t", answer="a", sources=[], reply_audio_path=None
+        )
         fake_service = MagicMock()
         fake_service.run_voice_turn.return_value = fake_result
 
@@ -309,7 +350,12 @@ class TestRunTurn:
             _run_turn(
                 app,
                 "sid-x",
-                {"notebook_id": nb_id, "user_id": user_id, "cancelled": False, "buffer": bytearray(b"audio")},
+                {
+                    "notebook_id": nb_id,
+                    "user_id": user_id,
+                    "cancelled": False,
+                    "buffer": bytearray(b"audio"),
+                },
             )
         emit.assert_any_call("voice:error", {"error": "tts_failed"}, namespace="/voice", to="sid-x")
 

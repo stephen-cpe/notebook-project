@@ -57,7 +57,9 @@ def _make_notebook_with_sources(app: object, username: str = "vidscr") -> int:
         content_registry_repo.get_or_create(
             content_hash=h,
             chroma_collection="doc_v",
-            extracted_text="Machine learning is a subset of AI. Neural networks are key to deep learning.",
+            extracted_text=(
+                "Machine learning is a subset of AI. Neural networks are key to deep learning."
+            ),
             char_count=80,
         )
         return nb.id
@@ -69,22 +71,22 @@ class TestStripMarkdownFences:
         assert _strip_markdown_fences(raw) == "plain text"
 
     def test_json_fence(self) -> None:
-        raw = "```json\n{\"slides\": []}\n```"
+        raw = '```json\n{"slides": []}\n```'
         assert _strip_markdown_fences(raw) == '{"slides": []}'
 
     def test_generic_fence(self) -> None:
-        raw = "```\n{\"slides\": []}\n```"
+        raw = '```\n{"slides": []}\n```'
         assert _strip_markdown_fences(raw) == '{"slides": []}'
 
     def test_fence_with_extra_text(self) -> None:
-        raw = "Here is the response:\n```json\n{\"slides\": []}\n```\nDone."
+        raw = 'Here is the response:\n```json\n{"slides": []}\n```\nDone.'
         assert _strip_markdown_fences(raw) == '{"slides": []}'
 
     def test_empty_string(self) -> None:
         assert _strip_markdown_fences("") == ""
 
     def test_starts_with_fence_no_newline(self) -> None:
-        raw = "```json\n{\"slides\": []}\n```"
+        raw = '```json\n{"slides": []}\n```'
         assert _strip_markdown_fences(raw) == '{"slides": []}'
 
 
@@ -191,13 +193,7 @@ class TestParseVideoResponse:
         assert slides[0]["heading"] == "Valid"
 
     def test_handles_non_list_bullets(self) -> None:
-        raw = json.dumps(
-            {
-                "slides": [
-                    {"type": "content", "heading": "H", "bullets": "not a list"}
-                ]
-            }
-        )
+        raw = json.dumps({"slides": [{"type": "content", "heading": "H", "bullets": "not a list"}]})
         slides = parse_video_response(raw)
         assert slides[0]["bullets"] == []
 
@@ -260,7 +256,9 @@ class TestVideoScripter:
 
         assert s1 == s2
 
-    def test_mock_includes_topic_in_slides(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_mock_includes_topic_in_slides(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AI_MOCK", "true")
         monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
         nb_id = _make_notebook_with_sources(app, "vs4")
@@ -294,8 +292,11 @@ class TestVideoScripter:
                 scripter.write_script(nb)
                 mock_chat.assert_called_once()
 
-    def test_real_mode_handles_ollama_error(self, app: object, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    def test_real_mode_handles_ollama_error(
+        self, app: object, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
         import logging
+
         caplog.set_level(logging.ERROR)
 
         monkeypatch.setenv("AI_MOCK", "false")
@@ -317,12 +318,17 @@ class TestVideoScripter:
         assert any("Video script generation failed" in r.message for r in caplog.records)
 
     def test_parse_response_with_markdown_fences(self) -> None:
-        raw = '```json\n{"slides": [{"type": "title", "heading": "H", "bullets": ["b"], "narration": "n"}]}\n```'
+        raw = (
+            '```json\n{"slides": [{"type": "title", "heading": "H", '
+            '"bullets": ["b"], "narration": "n"}]}\n```'
+        )
         slides = parse_video_response(raw)
         assert len(slides) == 1
         assert slides[0]["heading"] == "H"
 
-    def test_get_source_texts_filters_by_status(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_get_source_texts_filters_by_status(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("AI_MOCK", "true")
         with app.app_context():
             u = User(username="vs7", password_hash=hash_password("pw"))
@@ -333,17 +339,50 @@ class TestVideoScripter:
             db.session.commit()
             # ready source
             h1 = "r" * 64
-            db.session.add(Source(notebook_id=nb.id, filename="r.txt", content_hash=h1, content_type="txt", status="ready"))
+            db.session.add(
+                Source(
+                    notebook_id=nb.id,
+                    filename="r.txt",
+                    content_hash=h1,
+                    content_type="txt",
+                    status="ready",
+                )
+            )
             # partial source
             h2 = "p" * 64
-            db.session.add(Source(notebook_id=nb.id, filename="p.txt", content_hash=h2, content_type="txt", status="partial"))
+            db.session.add(
+                Source(
+                    notebook_id=nb.id,
+                    filename="p.txt",
+                    content_hash=h2,
+                    content_type="txt",
+                    status="partial",
+                )
+            )
             # failed source (should be excluded)
             h3 = "f" * 64
-            db.session.add(Source(notebook_id=nb.id, filename="f.txt", content_hash=h3, content_type="txt", status="failed"))
+            db.session.add(
+                Source(
+                    notebook_id=nb.id,
+                    filename="f.txt",
+                    content_hash=h3,
+                    content_type="txt",
+                    status="failed",
+                )
+            )
             db.session.commit()
-            content_registry_repo.get_or_create(content_hash=h1, chroma_collection="c1", extracted_text="ready text", char_count=10)
-            content_registry_repo.get_or_create(content_hash=h2, chroma_collection="c2", extracted_text="partial text", char_count=12)
-            content_registry_repo.get_or_create(content_hash=h3, chroma_collection="c3", extracted_text="failed text", char_count=11)
+            content_registry_repo.get_or_create(
+                content_hash=h1, chroma_collection="c1", extracted_text="ready text", char_count=10
+            )
+            content_registry_repo.get_or_create(
+                content_hash=h2,
+                chroma_collection="c2",
+                extracted_text="partial text",
+                char_count=12,
+            )
+            content_registry_repo.get_or_create(
+                content_hash=h3, chroma_collection="c3", extracted_text="failed text", char_count=11
+            )
 
             scripter = VideoScripter()
             texts = scripter._get_source_texts(nb.id)

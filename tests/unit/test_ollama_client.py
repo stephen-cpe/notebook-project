@@ -289,7 +289,15 @@ def _real_client(monkeypatch: pytest.MonkeyPatch) -> OllamaClient:
 
 
 class _FakeResp:
-    def __init__(self, *, status_code: int = 200, text: str = "", json: object = None, lines: list[str] | None = None, headers: object = None) -> None:
+    def __init__(
+        self,
+        *,
+        status_code: int = 200,
+        text: str = "",
+        json: object = None,
+        lines: list[str] | None = None,
+        headers: object = None,
+    ) -> None:
         self.status_code = status_code
         self.text = text
         self._json = json
@@ -368,7 +376,9 @@ class TestRealChat:
             client.chat([{"role": "user", "content": "hi"}])
         assert "HTTP 500" in str(excinfo.value)
 
-    def test_retries_after_connection_error_then_succeeds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_retries_after_connection_error_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         client = _real_client(monkeypatch)
         from requests import ConnectionError as ReqConnError
 
