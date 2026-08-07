@@ -106,14 +106,24 @@
     </div>
     <div id="audio-player">
       {% if notebook.audio_status == 'ready' and notebook.audio_path %}
-        <audio controls class="w-100 mt-2"><source src="{{ url_for('audio.audio_file', notebook_id=notebook.id) }}" type="audio/mpeg"></audio>
-        <button id="audio-delete" class="btn btn-outline-danger btn-sm mt-2 w-100"><i class="bi bi-trash"></i> Delete Audio</button>
+        <div class="overview-player-card mb-2">
+          <div class="overview-player-header">
+            <i class="bi bi-mic-fill"></i> Audio Overview
+          </div>
+          <audio controls class="w-100"><source src="{{ url_for('audio.audio_file', notebook_id=notebook.id) }}" type="audio/mpeg"></audio>
+          <button id="audio-delete" class="btn btn-outline-danger btn-sm w-100 mt-1"><i class="bi bi-trash"></i> Delete</button>
+        </div>
       {% endif %}
     </div>
     <div id="video-player" class="mt-2">
       {% if notebook.video_status == 'ready' and notebook.video_path %}
-        <video controls class="w-100"><source src="{{ url_for('video.video_file', notebook_id=notebook.id) }}" type="video/mp4"></video>
-        <button id="video-delete" class="btn btn-outline-danger btn-sm mt-2 w-100"><i class="bi bi-trash"></i> Delete Video</button>
+        <div class="overview-player-card">
+          <div class="overview-player-header">
+            <i class="bi bi-camera-video-fill"></i> Video Overview
+          </div>
+          <video controls class="w-100"><source src="{{ url_for('video.video_file', notebook_id=notebook.id) }}" type="video/mp4"></video>
+          <button id="video-delete" class="btn btn-outline-danger btn-sm w-100 mt-1"><i class="bi bi-trash"></i> Delete</button>
+        </div>
       {% endif %}
     </div>
   </div>
@@ -138,6 +148,7 @@
 <script type="application/json" id="nb-config">
 {"notebook_id": {{ notebook.id }}, "csrf_token": "{{ csrf_token() }}", "voice_enabled": {{ voice_enabled | tojson }}, "voice_max_recording_seconds": {{ voice_max_recording_seconds | default(60) }}}
 </script>
+<script src="{{ url_for('static', filename='js/chat-ui.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 {% if voice_enabled %}
 <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js" crossorigin="anonymous"></script>

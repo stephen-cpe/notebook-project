@@ -159,6 +159,21 @@ code {
   border-style: dashed !important;
 }
 
+/* Overview player cards — themed container for audio/video players */
+.overview-player-card {
+  background-color: var(--bg);
+  border: 1px solid var(--info);
+  border-radius: 0.5rem;
+  padding: 0.6rem;
+}
+
+.overview-player-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--info);
+  margin-bottom: 0.4rem;
+}
+
 .drop-zone-active {
   border-color: var(--info) !important;
   background-color: rgba(13, 202, 240, 0.05);

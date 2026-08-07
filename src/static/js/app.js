@@ -174,36 +174,17 @@
   var chatSend = el("chat-send");
   var chatMessages = el("chat-messages");
 
-  function appendMessage(role, text) {
-    var div = document.createElement("div");
-    div.className = "mb-2 " + (role === "user" ? "text-end" : "");
-    var bubble = document.createElement("span");
-    bubble.className = "d-inline-block px-3 py-2 rounded " +
-      (role === "user" ? "bg-info text-dark" : "bg-body-tertiary border border-secondary");
-    bubble.style.maxWidth = "80%";
-    bubble.textContent = text;
-    div.appendChild(bubble);
-    chatMessages.appendChild(div);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
   function sendChat() {
     var question = chatInput.value.trim();
     if (!question) return;
     chatInput.value = "";
     chatSend.disabled = true;
-    appendMessage("user", question);
+    ChatUI.appendMessage("user", question);
 
     // Assistant bubble with typing indicator.
-    var assistantDiv = document.createElement("div");
-    assistantDiv.className = "mb-2";
-    var bubble = document.createElement("span");
-    bubble.className = "d-inline-block px-3 py-2 rounded bg-body-tertiary border border-secondary";
-    bubble.style.maxWidth = "80%";
-    bubble.innerHTML = '<span class="typing-indicator"><span></span><span></span><span></span></span> Working...';
-    assistantDiv.appendChild(bubble);
-    chatMessages.appendChild(assistantDiv);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    var typing = ChatUI.appendTypingIndicator();
+    var assistantDiv = typing.div;
+    var bubble = typing.bubble;
 
     var firstToken = true;
 
@@ -241,20 +222,7 @@
             }
             if (data.done) {
               chatSend.disabled = false;
-              if (data.sources && data.sources.length > 0) {
-                var src = document.createElement("div");
-                src.className = "small mt-1";
-                var tags = data.sources.map(function (s) {
-                  var label = s.filename + (s.page ? " p." + s.page : "");
-                  var tag = document.createElement("span");
-                  tag.className = "badge bg-secondary me-1 source-citation";
-                  tag.textContent = label;
-                  tag.setAttribute("title", "Source: " + label);
-                  return tag.outerHTML;
-                }).join("");
-                src.innerHTML = '<span class="text-secondary">Sources: </span>' + tags;
-                assistantDiv.appendChild(src);
-              }
+              ChatUI.appendSources(assistantDiv, data.sources);
             }
             if (data.error) {
               chatSend.disabled = false;
@@ -534,10 +502,12 @@
 
   function showAudioPlayer() {
     audioPlayer.innerHTML =
-      '<audio controls class="w-100 mt-2"><source src="/notebooks/' +
-      NB_ID + '/audio/file" type="audio/mpeg"></audio>' +
-      '<button id="audio-delete" class="btn btn-outline-danger btn-sm mt-2 w-100">' +
-      '<i class="bi bi-trash"></i> Delete Audio</button>';
+      '<div class="overview-player-card mb-2">' +
+      '<div class="overview-player-header"><i class="bi bi-mic-fill"></i> Audio Overview</div>' +
+      '<audio controls class="w-100"><source src="/notebooks/' + NB_ID +
+      '/audio/file" type="audio/mpeg"></audio>' +
+      '<button id="audio-delete" class="btn btn-outline-danger btn-sm w-100 mt-1">' +
+      '<i class="bi bi-trash"></i> Delete</button></div>';
     audioBtn.disabled = false;
     audioBtn.innerHTML = '<i class="bi bi-mic"></i> Regen Audio';
     wireAudioDelete();
@@ -545,10 +515,12 @@
 
   function showVideoPlayer() {
     videoPlayer.innerHTML =
-      '<video controls class="w-100 mt-2"><source src="/notebooks/' +
-      NB_ID + '/video/file" type="video/mp4"></video>' +
-      '<button id="video-delete" class="btn btn-outline-danger btn-sm mt-2 w-100">' +
-      '<i class="bi bi-trash"></i> Delete Video</button>';
+      '<div class="overview-player-card">' +
+      '<div class="overview-player-header"><i class="bi bi-camera-video-fill"></i> Video Overview</div>' +
+      '<video controls class="w-100"><source src="/notebooks/' + NB_ID +
+      '/video/file" type="video/mp4"></video>' +
+      '<button id="video-delete" class="btn btn-outline-danger btn-sm w-100 mt-1">' +
+      '<i class="bi bi-trash"></i> Delete</button></div>';
     videoBtn.disabled = false;
     videoBtn.innerHTML = '<i class="bi bi-camera-video"></i> Regen Video';
     wireVideoDelete();
@@ -568,12 +540,12 @@
             audioBtn.innerHTML = '<i class="bi bi-mic"></i> Audio';
           } else {
             delBtn.disabled = false;
-            delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete Audio';
+            delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete';
           }
         })
         .catch(function () {
           delBtn.disabled = false;
-          delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete Audio';
+          delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete';
         });
     });
   }
@@ -592,12 +564,12 @@
             videoBtn.innerHTML = '<i class="bi bi-camera-video"></i> Video';
           } else {
             delBtn.disabled = false;
-            delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete Video';
+            delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete';
           }
         })
         .catch(function () {
           delBtn.disabled = false;
-          delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete Video';
+          delBtn.innerHTML = '<i class="bi bi-trash"></i> Delete';
         });
     });
   }

@@ -54,16 +54,6 @@
     return window.isSecureContext || location.hostname === "localhost" || location.hostname === "127.0.0.1";
   }
 
-  function appendMessage(role, text) {
-    var messages = document.getElementById("chat-messages");
-    if (!messages) return;
-    var div = document.createElement("div");
-    div.className = "chat-bubble " + (role === "user" ? "chat-user" : "chat-assistant");
-    div.textContent = text;
-    messages.appendChild(div);
-    messages.scrollTop = messages.scrollHeight;
-  }
-
   function startRecording() {
     if (recording) return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -148,6 +138,10 @@
     fd.append("audio", blob, "rec.webm");
     setStatus("Transcribing...");
     if (sendBtn) sendBtn.disabled = true;
+
+    // Show typing indicator in the chat area while processing.
+    var typing = ChatUI.appendTypingIndicator();
+
     fetch("/notebooks/" + config.notebook_id + "/voice/turn", {
       method: "POST",
       body: fd,
@@ -160,17 +154,24 @@
       .then(function (r) {
         if (r.status === 200) {
           var j = r.json || {};
-          appendMessage("user", j.transcript || "");
-          appendMessage("assistant", j.answer || "");
+          // Remove typing indicator.
+          if (typing && typing.div) typing.div.remove();
+          // Render the transcript and answer with the same styling as regular chat.
+          ChatUI.appendMessage("user", j.transcript || "");
+          var assistantDiv = ChatUI.appendMessage("assistant", j.answer || "");
+          if (assistantDiv && j.sources) ChatUI.appendSources(assistantDiv, j.sources);
           if (j.reply_audio_url) playReply(j.reply_audio_url);
           setStatus("");
         } else if (r.status === 422 && (r.json && r.json.error === "no_speech")) {
+          if (typing && typing.div) typing.div.remove();
           setStatus("No speech detected. Try again.");
         } else {
+          if (typing && typing.div) typing.div.remove();
           setStatus("Voice turn failed: " + ((r.json && r.json.error) || "error"));
         }
       })
       .catch(function (err) {
+        if (typing && typing.div) typing.div.remove();
         setStatus("Network error: " + err.message);
       })
       .finally(function () {
