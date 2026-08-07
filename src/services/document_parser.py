@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from src.services.exceptions import IngestionError
 
@@ -124,6 +125,50 @@ def parse_pptx(path: str) -> str:
 def parse_text_file(path: str) -> str:
     """Read a plain text or markdown file as UTF-8."""
     return Path(path).read_text(encoding="utf-8", errors="replace")
+
+
+def extract_docx_images(path: str) -> list[Any]:
+    """Extract all embedded images from a DOCX as PIL Images.
+
+    DOCX files are ZIP archives; embedded images live under ``word/media/``.
+    Returns a list of PIL Images. Returns an empty list if the file contains
+    no images or extraction fails for any reason (graceful degradation, FR-24).
+    """
+    return _extract_zip_media(path, "word/media/")
+
+
+def extract_pptx_images(path: str) -> list[Any]:
+    """Extract all embedded images from a PPTX as PIL Images.
+
+    PPTX files are ZIP archives; embedded images live under ``ppt/media/``.
+    Returns a list of PIL Images. Returns an empty list if the file contains
+    no images or extraction fails for any reason (graceful degradation, FR-24).
+    """
+    return _extract_zip_media(path, "ppt/media/")
+
+
+def _extract_zip_media(path: str, media_prefix: str) -> list[Any]:
+    """Extract images from a ZIP-based Office file under ``media_prefix``.
+
+    Used by both DOCX (``word/media/``) and PPTX (``ppt/media/``) extraction.
+    """
+    import io
+    import zipfile
+
+    from PIL import Image
+
+    images: list[Any] = []
+    try:
+        with zipfile.ZipFile(path) as z:
+            for name in z.namelist():
+                if not name.startswith(media_prefix):
+                    continue
+                with z.open(name) as fh:
+                    images.append(Image.open(io.BytesIO(fh.read())).convert("RGB"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Failed to extract images from %s: %s", path, exc)
+        return []
+    return images
 
 
 # Magic bytes for supported file types (NFR-23).

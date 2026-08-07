@@ -249,8 +249,110 @@ class TestOcrFallback:
 
 
 # ---------------------------------------------------------------------------
-# Error handling
+# OCR fallback for DOCX/PPTX (embedded images)
 # ---------------------------------------------------------------------------
+
+
+class TestOcrFallbackDocxPptx:
+    def test_docx_with_image_triggers_ocr(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A DOCX with sparse text + an embedded image triggers OCR fallback."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("OCR_TEXT_THRESHOLD", "10000")
+        svc = IngestionService()
+
+        with app.app_context():
+            result = svc.ingest_file(
+                str(FIXTURES / "_ocr_with_image.docx"), filename="_ocr_with_image.docx"
+            )
+
+        # Mock OCR returns canned text -> source is ready with OCR'd text.
+        assert result.ocr_used is True
+        assert len(result.extracted_text) > 0
+        assert result.status == "ready"
+
+    def test_pptx_with_image_triggers_ocr(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A PPTX with sparse text + an embedded image triggers OCR fallback."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("OCR_TEXT_THRESHOLD", "10000")
+        svc = IngestionService()
+
+        with app.app_context():
+            result = svc.ingest_file(
+                str(FIXTURES / "_ocr_with_image.pptx"), filename="_ocr_with_image.pptx"
+            )
+
+        assert result.ocr_used is True
+        assert len(result.extracted_text) > 0
+        assert result.status == "ready"
+
+    def test_text_only_docx_no_ocr_when_no_images(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A text-only DOCX (no images) does NOT trigger OCR even below threshold."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("OCR_TEXT_THRESHOLD", "10000")
+        svc = IngestionService()
+
+        with app.app_context():
+            result = svc.ingest_file(str(FIXTURES / "sample.docx"), filename="sample.docx")
+
+        # sample.docx has no images -> OCR not attempted -> text kept as-is.
+        assert result.ocr_used is False
+
+    def test_txt_never_triggers_ocr(
+        self, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """TXT files never trigger OCR (no images to OCR)."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("OCR_TEXT_THRESHOLD", "10000")
+        svc = IngestionService()
+
+        p = tmp_path / "tiny.txt"
+        p.write_text("hi", encoding="utf-8")
+        with app.app_context():
+            result = svc.ingest_file(str(p), filename="tiny.txt")
+
+        assert result.ocr_used is False
+
+    def test_docx_ocr_failure_does_not_block_ingestion(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """OCR failure on a DOCX with images keeps any extracted text (FR-24)."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("OCR_TEXT_THRESHOLD", "10000")
+        svc = IngestionService()
+
+        def _boom(_images: object, _prompt: str) -> str:
+            raise RuntimeError("OCR exploded")
+
+        with app.app_context():
+            from src.services.ocr_service import reset_ocr_service
+
+            reset_ocr_service()
+            svc._ocr = type(svc._ocr)(svc._config)
+            svc._ocr.ocr_images = _boom  # type: ignore[method-assign]
+            result = svc.ingest_file(
+                str(FIXTURES / "_ocr_with_image.docx"), filename="_ocr_with_image.docx"
+            )
+
+        # _ocr_with_image.docx has "Text content" paragraph + image.
+        # OCR fails but the extracted text is kept -> ready (text > 0 chars).
+        assert result.status == "ready"
+        assert result.ocr_used is False
 
 
 class TestErrorHandling:

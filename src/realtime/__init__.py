@@ -18,30 +18,19 @@ Server -> client events:
 - ``voice:error``       {error}
 - ``voice:done``        {state}
 
-The background worker writes the accumulated audio to a temp file, calls
-``VoiceService.run_voice_turn`` inside a Flask app context, and streams the
-reply MP3 back in chunks. The HTTP ``/voice/turn`` endpoint handles audio
-upload and the full pipeline (STT -> chat -> TTS); this namespace carries
-status notifications only.
+The HTTP ``/voice/turn`` endpoint handles audio upload and the full pipeline
+(STT -> chat -> TTS); this namespace carries status notifications only.
 """
 
 from __future__ import annotations
 
-import contextlib
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Per-sid voice session state: {notebook_id, user_id, buffer, cancelled}.
+# Per-sid voice session state: {notebook_id, user_id}.
 _SESSIONS: dict[str, dict[str, Any]] = {}
-
-# One active voice session per sid (enforced by the session map itself).
-
-_AUDIO_CHUNK_BYTES = 16 * 1024  # 16 KB per streamed reply chunk
 
 
 class VoiceNamespace:
@@ -91,8 +80,6 @@ class VoiceNamespace:
         _SESSIONS[getattr(request, "sid", "")] = {
             "notebook_id": int(notebook_id),
             "user_id": int(current_user.get_id() or 0),
-            "buffer": bytearray(),
-            "cancelled": False,
         }
         emit("voice:status", {"state": "ready"})
 
@@ -117,109 +104,8 @@ class VoiceNamespace:
         from flask_socketio import emit
 
         sid = getattr(request, "sid", "")
-        sess = _SESSIONS.get(sid)
-        if sess is not None:
-            sess["cancelled"] = True
         _SESSIONS.pop(sid, None)
         emit("voice:done", {"state": "cancelled"})
-
-
-def _run_turn(app: Any, sid: str, sess: dict[str, Any]) -> None:  # noqa: ANN401
-    """Background worker: write buffer to temp file, run the voice pipeline,
-    and emit transcript/answer/sources/audio_chunk/done events to ``sid``.
-
-    Runs inside a pushed Flask app context (``app``) so DB + config access
-    work. Checks the cancellation flag before each heavy step; if cancelled,
-    emits ``voice:done`` with ``state=cancelled`` and cleans up.
-    """
-    from flask_socketio import emit
-
-    cfg = app.config["NOTEBOOK_CONFIG"]
-    ns = "/voice"
-
-    def _emit(event: str, data: Any) -> None:  # noqa: ANN401
-        emit(event, data, namespace=ns, to=sid)
-
-    tmp_path: str | None = None
-    try:
-        with app.app_context():
-            if sess.get("cancelled"):
-                _emit("voice:done", {"state": "cancelled"})
-                return
-
-            buffer: bytearray = sess["buffer"]
-            if not buffer:
-                _emit("voice:error", {"error": "no audio received"})
-                return
-
-            # Write the accumulated audio to a temp file for the STT pipeline.
-            fd, tmp_path = tempfile.mkstemp(suffix="_voice.webm")
-            with os.fdopen(fd, "wb") as fh:
-                fh.write(bytes(buffer))
-
-            # Resolve the notebook + speaker.
-            from src.repositories import notebook_repo
-
-            notebook = notebook_repo.get_by_id(int(sess["notebook_id"]))
-            if notebook is None:
-                _emit("voice:error", {"error": "notebook not found"})
-                return
-
-            from src.repositories import user_repo
-
-            user = user_repo.get_by_id(int(sess["user_id"]))
-            speaker = (
-                getattr(user, "voice_speaker", cfg.voice_tts_fallback_speaker)
-                if user
-                else cfg.voice_tts_fallback_speaker
-            )
-
-            # Transcribe + chat + TTS.
-            _emit("voice:status", {"state": "transcribing"})
-            from src.services.voice_service import get_voice_service
-
-            result = get_voice_service().run_voice_turn(notebook, tmp_path, speaker)
-
-            if result.error == "no_speech":
-                _emit("voice:error", {"error": "no_speech"})
-                return
-            if result.error:
-                _emit("voice:error", {"error": result.error})
-                return
-
-            _emit("voice:transcript", {"text": result.transcript, "final": True})
-
-            if sess.get("cancelled"):
-                _emit("voice:done", {"state": "cancelled"})
-                return
-
-            # Answer + sources.
-            _emit("voice:answer", {"text": result.answer, "sources": result.sources})
-            _emit("voice:sources", {"sources": result.sources})
-
-            # Stream the reply audio back in chunks, if present.
-            if result.reply_audio_path and Path(result.reply_audio_path).is_file():
-                _emit("voice:status", {"state": "speaking"})
-                with open(result.reply_audio_path, "rb") as af:
-                    while True:
-                        if sess.get("cancelled"):
-                            _emit("voice:done", {"state": "cancelled"})
-                            return
-                        chunk = af.read(_AUDIO_CHUNK_BYTES)
-                        if not chunk:
-                            break
-                        emit("voice:audio_chunk", chunk, namespace=ns, to=sid)
-
-            _emit("voice:status", {"state": "done"})
-            _emit("voice:done", {"state": "done"})
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("voice namespace turn failed: %s", exc)
-        with contextlib.suppress(Exception):
-            _emit("voice:error", {"error": str(exc)})
-    finally:
-        if tmp_path is not None:
-            with contextlib.suppress(Exception):
-                Path(tmp_path).unlink(missing_ok=True)
 
 
 def register_voice_namespace(socketio: Any) -> None:  # noqa: ANN401

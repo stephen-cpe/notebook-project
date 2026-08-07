@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING
 from src.services.chunker import chunk_text
 from src.services.document_parser import (
     detect_content_type,
+    extract_docx_images,
+    extract_pptx_images,
     extract_text,
     parse_pdf_with_pages,
 )
@@ -209,7 +211,6 @@ class IngestionService:
             self._vector_store.delete_collection(content_hash)
             raise
 
-        status = "ready" if not ocr_used else "ready"
         logger.info(
             "Ingested %s: hash=%s chunks=%d chars=%d ocr=%s",
             filename,
@@ -220,7 +221,7 @@ class IngestionService:
         )
         return IngestionResult(
             content_hash=content_hash,
-            status=status,
+            status="ready",
             extracted_text=text,
             char_count=len(text),
             page_count=page_count,
@@ -230,7 +231,18 @@ class IngestionService:
     def _extract_with_ocr_fallback(
         self, file_path: str, content_type: str
     ) -> tuple[str, int | None, bool]:
-        """Extract text; fall back to OCR if below threshold and enabled."""
+        """Extract text; fall back to OCR if below threshold and enabled.
+
+        OCR is dispatched by content type:
+        - PDF: rendered to images via Poppler (``ocr_pdf``).
+        - DOCX/PPTX: embedded images extracted from the ZIP archive (``ocr_images``);
+          OCR is only attempted when images exist, per the "only OCR when images
+          exist" rule.
+        - TXT/MD: no OCR (no images to OCR).
+
+        OCR failure never blocks ingestion (FR-24): on failure, any text already
+        extracted is kept and the source is later marked ``partial`` if empty.
+        """
         threshold = self._config.ocr_text_threshold
         ocr_used = False
 
@@ -242,29 +254,48 @@ class IngestionService:
         if len(text.strip()) >= threshold:
             return text, page_count, False
 
-        # OCR fallback.
-        if self._ocr.is_available() and content_type == "pdf":
-            logger.info("Text below threshold (%d chars), attempting OCR", len(text.strip()))
-            try:
-                ocr_text = self._ocr.ocr_pdf(file_path, OCR_PROMPT_TEXT)
-            except Exception as exc:  # noqa: BLE001
-                # OCR failure must not block ingestion (P0-1.10). Keep any text
-                # already extracted; mark partial if no text, else proceed.
-                logger.error("OCR fallback failed for %s: %s", file_path, exc)
-                if text.strip():
-                    # We have some text from the first pass — keep it and proceed.
-                    return text, page_count, False
-                # No text at all and OCR failed -> partial with a useful message.
-                return text, page_count, False
-            if ocr_text.strip():
-                text = ocr_text
-                ocr_used = True
-
-        if not text.strip() and not self._ocr.is_available():
-            # OCR disabled and no text -> partial.
+        # OCR fallback — only when enabled and the type has images to OCR.
+        if not self._ocr.is_available():
             return text, page_count, False
 
+        ocr_text = self._run_ocr_fallback(file_path, content_type)
+        if ocr_text is None:
+            # OCR was not applicable for this type (e.g. TXT/MD, or DOCX/PPTX
+            # with no embedded images). Keep any extracted text as-is.
+            return text, page_count, False
+        if ocr_text.strip():
+            text = ocr_text
+            ocr_used = True
+
         return text, page_count, ocr_used
+
+    def _run_ocr_fallback(self, file_path: str, content_type: str) -> str | None:
+        """Run the type-appropriate OCR fallback.
+
+        Returns the OCR'd text (possibly empty), or ``None`` if OCR is not
+        applicable for this content type (no images to OCR). Logs and swallows
+        OCR errors so they never block ingestion (FR-24).
+        """
+        try:
+            if content_type == "pdf":
+                logger.info("Text below threshold, attempting PDF OCR")
+                return self._ocr.ocr_pdf(file_path, OCR_PROMPT_TEXT)
+            if content_type == "docx":
+                images = extract_docx_images(file_path)
+                if not images:
+                    return None
+                logger.info("Text below threshold, attempting DOCX OCR (%d images)", len(images))
+                return self._ocr.ocr_images(images, OCR_PROMPT_TEXT)
+            if content_type == "pptx":
+                images = extract_pptx_images(file_path)
+                if not images:
+                    return None
+                logger.info("Text below threshold, attempting PPTX OCR (%d images)", len(images))
+                return self._ocr.ocr_images(images, OCR_PROMPT_TEXT)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("OCR fallback failed for %s: %s", file_path, exc)
+            return ""
+        return None
 
 
 _service: IngestionService | None = None

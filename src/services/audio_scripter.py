@@ -15,9 +15,7 @@ import json
 import logging
 import re
 
-from src.extensions import db
-from src.models import Notebook, Source
-from src.repositories import content_registry_repo
+from src.models import Notebook
 from src.services.ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
@@ -175,7 +173,12 @@ class AudioScripter:
 
     def write_dialogue(self, notebook: Notebook, topic: str = "") -> list[dict[str, str]]:
         """Generate the dialogue script."""
-        source_texts = self._get_source_texts(notebook.id)
+        from src.services.context_builder import select_sources_within_budget
+
+        selection = select_sources_within_budget(
+            notebook.id, self._config.overview_max_context_chars
+        )
+        source_texts = selection.texts
         if not source_texts:
             logger.info("No sources for notebook %d; dialogue is empty", notebook.id)
             return []
@@ -184,10 +187,10 @@ class AudioScripter:
             return self._mock_dialogue(notebook.id, source_texts)
 
         try:
-            total_chars = sum(len(t) for t in source_texts)
+            total_chars = selection.total_chars
             duration_instruction = _build_duration_instruction(
-                self._config.audio_min_duration_seconds,
-                self._config.audio_max_duration_seconds,
+                self._config.overview_min_duration_seconds,
+                self._config.overview_max_duration_seconds,
                 total_chars,
             )
             system_prompt = DIALOGUE_SYSTEM_PROMPT.format(
@@ -196,7 +199,7 @@ class AudioScripter:
 
             user_content = (
                 "Write a two-host podcast dialogue based on these source texts:\n\n"
-                + "\n\n".join(source_texts[:3])
+                + "\n\n".join(source_texts)
             )
             if topic:
                 user_content = f"Focus the discussion on: {topic}\n\n" + user_content
@@ -224,23 +227,6 @@ class AudioScripter:
         except Exception as exc:  # noqa: BLE001
             logger.error("Dialogue generation failed for notebook %d: %s", notebook.id, exc)
             return []
-
-    def _get_source_texts(self, notebook_id: int) -> list[str]:
-        """Return cached extracted texts from the ContentRegistry."""
-        sources = (
-            db.session.query(Source)
-            .filter(
-                Source.notebook_id == notebook_id,
-                Source.status.in_(["ready", "partial"]),
-            )
-            .all()
-        )
-        texts: list[str] = []
-        for s in sources:
-            entry = content_registry_repo.get_by_hash(s.content_hash)
-            if entry and entry.extracted_text:
-                texts.append(entry.extracted_text)
-        return texts
 
     @staticmethod
     def _ensure_alternation(

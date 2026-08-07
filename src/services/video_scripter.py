@@ -119,7 +119,12 @@ class VideoScripter:
 
     def write_script(self, notebook: Notebook, topic: str = "") -> list[dict[str, Any]]:
         """Generate the slide script with narration."""
-        source_texts = self._get_source_texts(notebook.id)
+        from src.services.context_builder import select_sources_within_budget
+
+        selection = select_sources_within_budget(
+            notebook.id, self._config.overview_max_context_chars
+        )
+        source_texts = selection.texts
         if not source_texts:
             logger.info("No sources for notebook %d; video script is empty", notebook.id)
             return []
@@ -128,10 +133,10 @@ class VideoScripter:
             return self._mock_script(notebook.id, source_texts)
 
         try:
-            total_chars = sum(len(t) for t in source_texts)
+            total_chars = selection.total_chars
             duration_instruction = _build_duration_instruction(
-                self._config.audio_min_duration_seconds,
-                self._config.audio_max_duration_seconds,
+                self._config.overview_min_duration_seconds,
+                self._config.overview_max_duration_seconds,
                 total_chars,
             )
             system_prompt = VIDEO_SYSTEM_PROMPT.format(
@@ -140,7 +145,7 @@ class VideoScripter:
 
             user_content = (
                 "Create a narrated video presentation based on these source texts:\n\n"
-                + "\n\n".join(source_texts[:3])
+                + "\n\n".join(source_texts)
             )
             if topic:
                 user_content = f"Focus the presentation on: {topic}\n\n" + user_content

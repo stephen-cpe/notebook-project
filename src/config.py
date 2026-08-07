@@ -140,11 +140,14 @@ class Config:
         default_factory=lambda: os.getenv("AUDIO_VOICE_B", "en-US-AndrewNeural")
     )
     audio_format: str = field(default_factory=lambda: os.getenv("AUDIO_FORMAT", "mp3"))
-    audio_min_duration_seconds: int = field(
+    overview_min_duration_seconds: int = field(
         default_factory=lambda: _int("OVERVIEW_MIN_DURATION_SECONDS", 60)
     )
-    audio_max_duration_seconds: int = field(
+    overview_max_duration_seconds: int = field(
         default_factory=lambda: _int("OVERVIEW_MAX_DURATION_SECONDS", 480)
+    )
+    overview_max_context_chars: int = field(
+        default_factory=lambda: _int("OVERVIEW_MAX_CONTEXT_CHARS", 30000)
     )
 
     # Admin seed (first run only)
@@ -234,6 +237,9 @@ class Config:
             "audio_voice_a": self.audio_voice_a,
             "audio_voice_b": self.audio_voice_b,
             "audio_format": self.audio_format,
+            "overview_min_duration_seconds": self.overview_min_duration_seconds,
+            "overview_max_duration_seconds": self.overview_max_duration_seconds,
+            "overview_max_context_chars": self.overview_max_context_chars,
             "ci": self.ci,
             "run_integration": self.run_integration,
         }

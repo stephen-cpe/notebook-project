@@ -208,6 +208,8 @@ Tests run fully offline:
 - SQLAlchemy uses a temporary file-based SQLite database (per-test isolation);
   PostgreSQL-only validation is bypassed per-test.
 
+CI enforces 80% coverage (`--cov-fail-under=80`); the current suite is at 89%.
+
 Integration tests (real Ollama Cloud / real HuggingFace model loads) are
 gated behind `RUN_INTEGRATION=1`:
 

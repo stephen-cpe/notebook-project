@@ -103,6 +103,21 @@ class OCRService:
                 parts.append(f"[Page {i + 1}]\n{text}")
         return "\n\n".join(parts)
 
+    def ocr_images(self, images: list[Any], prompt: str = OCR_PROMPT_TEXT) -> str:  # noqa: ANN401
+        """OCR a list of PIL images (e.g. embedded DOCX/PPTX images).
+
+        Returns concatenated text with per-image ``[Image N]`` headers, or "" if
+        disabled or the image list is empty.
+        """
+        if not self._enabled or not images:
+            return ""
+        parts: list[str] = []
+        for i, img in enumerate(images):
+            text = self.ocr_image(img, prompt)
+            if text:
+                parts.append(f"[Image {i + 1}]\n{text}")
+        return "\n\n".join(parts)
+
     def render_pdf_pages(self, pdf_path: str) -> list[Any]:
         """Convert a PDF to a list of PIL images using pdf2image + Poppler."""
         from pdf2image import convert_from_path

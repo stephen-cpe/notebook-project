@@ -102,6 +102,39 @@ def make_empty_pdf() -> None:
     pdf.output(str(FIXTURES / "empty.pdf"))
 
 
+def make_docx_with_image() -> None:
+    """A DOCX with sparse text + one embedded image, for OCR fallback tests."""
+    from docx import Document
+    from docx.shared import Inches
+
+    _make_ocr_test_image()
+    doc = Document()
+    doc.add_paragraph("Text content")
+    doc.add_picture(str(FIXTURES / "_ocr_test_red.png"), width=Inches(1))
+    doc.save(str(FIXTURES / "_ocr_with_image.docx"))
+
+
+def make_pptx_with_image() -> None:
+    """A PPTX with sparse text + one embedded image, for OCR fallback tests."""
+    from pptx import Presentation
+    from pptx.util import Inches
+
+    _make_ocr_test_image()
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.add_picture(
+        str(FIXTURES / "_ocr_test_red.png"), Inches(1), Inches(1), width=Inches(2)
+    )
+    prs.save(str(FIXTURES / "_ocr_with_image.pptx"))
+
+
+def _make_ocr_test_image() -> None:
+    """A small red PNG used as an embedded image in the DOCX/PPTX fixtures."""
+    from PIL import Image
+
+    Image.new("RGB", (100, 100), (255, 0, 0)).save(str(FIXTURES / "_ocr_test_red.png"))
+
+
 if __name__ == "__main__":
     make_pdf()
     make_docx()
@@ -109,4 +142,6 @@ if __name__ == "__main__":
     make_txt()
     make_md()
     make_empty_pdf()
+    make_docx_with_image()
+    make_pptx_with_image()
     print("Fixtures generated in", FIXTURES)

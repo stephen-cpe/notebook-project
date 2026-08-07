@@ -21,6 +21,8 @@ choices for the implemented codebase.
 | 8 | Embedding/OCR provider | Both support `local` (default) and `hf_inference` (opt-in). |
 | 9 | Vector store backend | `CHROMA_DB=local` (default) or `CHROMA_DB=cloud` with graceful fallback. |
 | 10 | Voice conversation | Push-to-talk via HTTP `/voice/turn` endpoint: record audio, transcribe with faster-whisper, answer via `ChatService.chat_sync`, synthesize reply via edge-TTS. A `/voice` SocketIO namespace provides real-time status notifications. The spoken reply has markdown and citation brackets stripped for natural narration. Disabled by default (`VOICE_ENABLED=false`). |
+| 11 | Overview source selection | Summary, audio, and video generators share one `select_sources_within_budget()` helper (`context_builder.py`) that orders sources by upload time (`created_at`) and includes as many as fit within `OVERVIEW_MAX_CONTEXT_CHARS` (default 30000). The first source is always included even if oversized. Dropped sources are logged. |
+| 12 | OCR fallback scope | GLM-OCR runs on PDF (rendered to images via Poppler), DOCX (embedded images extracted from `word/media/`), and PPTX (embedded images from `ppt/media/`). TXT/MD never trigger OCR (no images). OCR is only attempted when embedded images exist; text-only DOCX/PPTX with sparse text skip OCR. |
 
 ## 2. Tech stack
 
@@ -69,12 +71,14 @@ notebook-project/
 |   |-- repositories/           # user_repo, notebook_repo, source_repo, chat_repo, content_registry_repo
 |   |-- services/
 |   |   |-- exceptions.py       # typed hierarchy
+|   |   |-- auth_service.py     # password hashing, signup, authenticate, AuthUser
 |   |   |-- embeddings.py       # Qwen3-Embedding (local or HF Inference API)
 |   |   |-- vector_store.py     # ChromaDB (local or Cloud with fallback)
-|   |   |-- document_parser.py  # PDF/DOCX/PPTX/TXT/MD extraction + magic bytes
-|   |   |-- ocr_service.py      # GLM-OCR (local or HF Inference API)
+|   |   |-- document_parser.py  # PDF/DOCX/PPTX/TXT/MD extraction + magic bytes + image extraction (DOCX/PPTX)
+|   |   |-- ocr_service.py      # GLM-OCR (local or HF Inference API); ocr_pdf + ocr_images
 |   |   |-- chunker.py          # RecursiveCharacterTextSplitter
-|   |   |-- ingestion.py        # parse -> OCR fallback -> chunk -> embed -> store
+|   |   |-- ingestion.py        # parse -> OCR fallback (PDF/DOCX/PPTX dispatch) -> chunk -> embed -> store
+|   |   |-- context_builder.py # select_sources_within_budget (shared by summary/audio/video)
 |   |   |-- rag_retriever.py    # multi-collection retrieve + merge + recovery
 |   |   |-- guardrails.py       # scope + groundedness checks
 |   |   |-- ollama_client.py    # Ollama Cloud chat (sync + stream)
@@ -110,8 +114,14 @@ notebook-project/
 |   |   |-- js/voice.js          # push-to-talk recording + voice turn
 |   |   `-- js/settings.js
 |   `-- templates/
-|       |-- base.html, notebook.html, settings.html, error.html
-|       |-- auth/, notebooks/, admin/, _partials/
+|       |-- base.html
+|       |-- notebook.html
+|       |-- settings.html
+|       |-- reset_password.html
+|       |-- error.html
+|       |-- auth/ (login.html, signup.html)
+|       |-- notebooks/ (list.html)
+|       `-- admin/ (dashboard.html)
 |-- tests/
 |   |-- conftest.py
 |   |-- fixtures/
@@ -267,5 +277,12 @@ DELETE notebook -> routes/notebooks.py
 ## 9. Configuration
 
 See `.env.example` for all environment variables. Key groups: Flask, database,
-Ollama Cloud, HuggingFace embeddings/OCR, vector store, sources, audio, voice,
-admin seed, CI flags.
+Ollama Cloud, HuggingFace embeddings/OCR, vector store, sources, overview
+duration/context bounds, audio, voice, admin seed, CI flags.
+
+Notable overview controls:
+- `OVERVIEW_MIN_DURATION_SECONDS` / `OVERVIEW_MAX_DURATION_SECONDS` -- target
+  spoken-duration bounds for both Audio and Video Overview generation.
+- `OVERVIEW_MAX_CONTEXT_CHARS` -- character budget for source texts fed to the
+  LLM when generating summaries, audio, and video overviews. Sources are
+  included in upload order until the budget is reached (default 30000).

@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import sys
 import types
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,7 +19,6 @@ from src.extensions import db
 from src.models import Notebook, User
 from src.realtime import (
     VoiceNamespace,
-    _run_turn,
     register_voice_namespace,
 )
 from src.services.auth_service import hash_password
@@ -165,7 +162,6 @@ class TestVoiceNamespaceStart:
         assert "sid-owner" in rt._SESSIONS
         assert rt._SESSIONS["sid-owner"]["notebook_id"] == nb_id
         assert rt._SESSIONS["sid-owner"]["user_id"] == user_id
-        assert rt._SESSIONS["sid-owner"]["cancelled"] is False
         emit.assert_any_call("voice:status", {"state": "ready"})
 
 
@@ -201,163 +197,6 @@ class TestVoiceNamespaceAudio:
 
         assert "sid-cancel" not in rt._SESSIONS
         emit.assert_called_once_with("voice:done", {"state": "cancelled"})
-
-
-class TestRunTurn:
-    def test_cancelled_emits_done(self, app: object) -> None:
-        user_id, nb_id = _make_user_and_notebook(app)
-        emit = MagicMock()
-        with (
-            patch("flask_socketio.emit", emit),
-            app.app_context(),
-        ):
-            _run_turn(
-                app,
-                "sid-x",
-                {
-                    "notebook_id": nb_id,
-                    "user_id": user_id,
-                    "cancelled": True,
-                    "buffer": bytearray(b"abc"),
-                },
-            )
-        emit.assert_any_call("voice:done", {"state": "cancelled"}, namespace="/voice", to="sid-x")
-
-    def test_empty_buffer_emits_error(self, app: object) -> None:
-        user_id, nb_id = _make_user_and_notebook(app)
-        emit = MagicMock()
-        with (
-            patch("flask_socketio.emit", emit),
-            app.app_context(),
-        ):
-            _run_turn(
-                app,
-                "sid-x",
-                {
-                    "notebook_id": nb_id,
-                    "user_id": user_id,
-                    "cancelled": False,
-                    "buffer": bytearray(),
-                },
-            )
-        emit.assert_any_call(
-            "voice:error", {"error": "no audio received"}, namespace="/voice", to="sid-x"
-        )
-
-    def test_happy_path_streams_audio(self, app: object, tmp_path: Path) -> None:
-        user_id, nb_id = _make_user_and_notebook(app)
-        emit = MagicMock()
-
-        # A fake reply MP3 on disk.
-        reply_path = tmp_path / "reply.mp3"
-        reply_path.write_bytes(b"fake-mp3-bytes")
-
-        fake_result = SimpleNamespace(
-            error=None,
-            transcript="hello world",
-            answer="The answer is in the sources.",
-            sources=[{"filename": "doc.txt", "page": 1}],
-            reply_audio_path=str(reply_path),
-        )
-        fake_service = MagicMock()
-        fake_service.run_voice_turn.return_value = fake_result
-
-        with (
-            patch("flask_socketio.emit", emit),
-            patch("src.services.voice_service.get_voice_service", return_value=fake_service),
-            app.app_context(),
-        ):
-            _run_turn(
-                app,
-                "sid-happy",
-                {
-                    "notebook_id": nb_id,
-                    "user_id": user_id,
-                    "cancelled": False,
-                    "buffer": bytearray(b"audio"),
-                },
-            )
-
-        # Transcribe -> answer -> sources -> audio chunks -> done.
-        emit.assert_any_call(
-            "voice:status", {"state": "transcribing"}, namespace="/voice", to="sid-happy"
-        )
-        emit.assert_any_call(
-            "voice:transcript",
-            {"text": "hello world", "final": True},
-            namespace="/voice",
-            to="sid-happy",
-        )
-        emit.assert_any_call(
-            "voice:answer",
-            {
-                "text": "The answer is in the sources.",
-                "sources": [{"filename": "doc.txt", "page": 1}],
-            },
-            namespace="/voice",
-            to="sid-happy",
-        )
-        emit.assert_any_call(
-            "voice:status", {"state": "speaking"}, namespace="/voice", to="sid-happy"
-        )
-        emit.assert_any_call("voice:status", {"state": "done"}, namespace="/voice", to="sid-happy")
-        emit.assert_any_call("voice:done", {"state": "done"}, namespace="/voice", to="sid-happy")
-        # Audio bytes were emitted as binary events.
-        assert any(call.args[0] == "voice:audio_chunk" for call in emit.call_args_list)
-
-    def test_no_speech_emits_error(self, app: object) -> None:
-        user_id, nb_id = _make_user_and_notebook(app)
-        emit = MagicMock()
-
-        fake_result = SimpleNamespace(
-            error="no_speech", transcript="", answer="", sources=[], reply_audio_path=None
-        )
-        fake_service = MagicMock()
-        fake_service.run_voice_turn.return_value = fake_result
-
-        with (
-            patch("flask_socketio.emit", emit),
-            patch("src.services.voice_service.get_voice_service", return_value=fake_service),
-            app.app_context(),
-        ):
-            _run_turn(
-                app,
-                "sid-x",
-                {
-                    "notebook_id": nb_id,
-                    "user_id": user_id,
-                    "cancelled": False,
-                    "buffer": bytearray(b"audio"),
-                },
-            )
-        emit.assert_any_call("voice:error", {"error": "no_speech"}, namespace="/voice", to="sid-x")
-
-    def test_generic_error_emits_error(self, app: object) -> None:
-        user_id, nb_id = _make_user_and_notebook(app)
-        emit = MagicMock()
-
-        fake_result = SimpleNamespace(
-            error="tts_failed", transcript="t", answer="a", sources=[], reply_audio_path=None
-        )
-        fake_service = MagicMock()
-        fake_service.run_voice_turn.return_value = fake_result
-
-        with (
-            patch("flask_socketio.emit", emit),
-            patch("src.services.voice_service.get_voice_service", return_value=fake_service),
-            app.app_context(),
-        ):
-            _run_turn(
-                app,
-                "sid-x",
-                {
-                    "notebook_id": nb_id,
-                    "user_id": user_id,
-                    "cancelled": False,
-                    "buffer": bytearray(b"audio"),
-                },
-            )
-        emit.assert_any_call("voice:error", {"error": "tts_failed"}, namespace="/voice", to="sid-x")
 
 
 class TestRegisterVoiceNamespace:

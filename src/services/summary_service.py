@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from src.extensions import db
 from src.models import Notebook, Source
-from src.repositories import content_registry_repo
+from src.services.context_builder import select_sources_within_budget
 from src.services.ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
@@ -87,6 +87,9 @@ class SummaryService:
     """Generates + persists notebook summaries with idempotency."""
 
     def __init__(self) -> None:
+        from src.config import Config
+
+        self._config = Config()
         self._client = get_ollama_client()
 
     def generate_summary(self, notebook: Notebook) -> SummaryResult | None:
@@ -110,8 +113,11 @@ class SummaryService:
                 skipped=True,
             )
 
-        # Get source texts.
-        source_texts = self._get_source_texts(source_hashes)
+        # Get source texts (budgeted, ordered by upload time).
+        selection = select_sources_within_budget(
+            notebook.id, self._config.overview_max_context_chars
+        )
+        source_texts = selection.texts
 
         if not source_texts:
             # No sources -> placeholder.
@@ -126,7 +132,7 @@ class SummaryService:
         try:
             user_content = (
                 "Summarize the following source texts and suggest 5 questions:\n\n"
-                + "\n\n".join(source_texts[:3])  # cap to first 3 for context
+                + "\n\n".join(source_texts)
             )
             messages = [
                 {"role": "system", "content": SUMMARY_SYSTEM_PROMPT},
@@ -162,15 +168,6 @@ class SummaryService:
             .all()
         )
         return [s.content_hash for s in sources]
-
-    def _get_source_texts(self, content_hashes: list[str]) -> list[str]:
-        """Return cached extracted texts from the ContentRegistry."""
-        texts: list[str] = []
-        for h in content_hashes:
-            entry = content_registry_repo.get_by_hash(h)
-            if entry and entry.extracted_text:
-                texts.append(entry.extracted_text)
-        return texts
 
     def _persist(
         self,

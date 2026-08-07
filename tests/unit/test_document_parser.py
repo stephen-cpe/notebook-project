@@ -168,3 +168,53 @@ class TestExtractText:
         """A blank PDF (no text layer) returns empty -> triggers OCR fallback."""
         text = extract_text(str(FIXTURES / "empty.pdf"), "pdf")
         assert text.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Image extraction (DOCX/PPTX) for OCR fallback
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDocxImages:
+    def test_extracts_image_from_docx_with_image(self) -> None:
+        from src.services.document_parser import extract_docx_images
+
+        images = extract_docx_images(str(FIXTURES / "_ocr_with_image.docx"))
+        assert len(images) == 1
+        # Each image is a PIL Image.
+        from PIL import Image
+
+        assert isinstance(images[0], Image.Image)
+
+    def test_no_images_in_text_only_docx(self) -> None:
+        from src.services.document_parser import extract_docx_images
+
+        images = extract_docx_images(str(FIXTURES / "sample.docx"))
+        assert images == []
+
+    def test_missing_file_returns_empty(self) -> None:
+        from src.services.document_parser import extract_docx_images
+
+        assert extract_docx_images("nonexistent_12345.docx") == []
+
+
+class TestExtractPptxImages:
+    def test_extracts_image_from_pptx_with_image(self) -> None:
+        from src.services.document_parser import extract_pptx_images
+
+        images = extract_pptx_images(str(FIXTURES / "_ocr_with_image.pptx"))
+        assert len(images) == 1
+        from PIL import Image
+
+        assert isinstance(images[0], Image.Image)
+
+    def test_no_images_in_text_only_pptx(self) -> None:
+        from src.services.document_parser import extract_pptx_images
+
+        images = extract_pptx_images(str(FIXTURES / "sample.pptx"))
+        assert images == []
+
+    def test_missing_file_returns_empty(self) -> None:
+        from src.services.document_parser import extract_pptx_images
+
+        assert extract_pptx_images("nonexistent_12345.pptx") == []

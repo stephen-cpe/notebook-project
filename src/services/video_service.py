@@ -342,14 +342,6 @@ class VideoService:
         db.session.commit()
         return VideoResult(status=VIDEO_STATUS_READY, video_path=output_path)
 
-    @staticmethod
-    def _mock_synthesize(output_path: str) -> bool:
-        try:
-            Path(output_path).write_bytes(b"stub mp3")
-            return True
-        except Exception:
-            return False
-
     def _set_status(self, notebook: Notebook, status: str) -> None:
         notebook.video_status = status
         db.session.commit()

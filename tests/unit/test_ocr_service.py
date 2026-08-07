@@ -177,6 +177,48 @@ class TestOcrPdf:
         assert svc.ocr_pdf("empty.pdf") == ""
 
 
+class TestOcrImages:
+    def test_ocr_images_mock_returns_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        from PIL import Image
+
+        img = Image.new("RGB", (10, 10), (255, 0, 0))
+        text = svc.ocr_images([img], OCR_PROMPT_TEXT)
+        assert isinstance(text, str)
+        assert len(text) > 0
+        assert "image" in text.lower()
+
+    def test_ocr_images_disabled_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        from PIL import Image
+
+        img = Image.new("RGB", (10, 10), (255, 0, 0))
+        assert svc.ocr_images([img], OCR_PROMPT_TEXT) == ""
+
+    def test_ocr_images_empty_list_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        assert svc.ocr_images([], OCR_PROMPT_TEXT) == ""
+
+    def test_ocr_images_multiple_images_concatenated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        from PIL import Image
+
+        img1 = Image.new("RGB", (10, 10), (255, 0, 0))
+        img2 = Image.new("RGB", (10, 10), (0, 255, 0))
+        text = svc.ocr_images([img1, img2], OCR_PROMPT_TEXT)
+        # Both images should produce per-image headers.
+        assert "[Image 1]" in text
+        assert "[Image 2]" in text
+
+
 # ---------------------------------------------------------------------------
 # Mock OCR fallback prompt
 # ---------------------------------------------------------------------------

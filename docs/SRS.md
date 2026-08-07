@@ -114,8 +114,11 @@ and converse with your notebook by voice.
 - **FR-22** SHA-256 hashing; content registry dedup.
 - **FR-23** Text extraction per type: pypdf, python-docx, python-pptx, plain
   read.
-- **FR-24** OCR fallback (GLM-OCR) when text is below threshold. OCR failure
-  does not block ingestion; source marked partial.
+- **FR-24** OCR fallback (GLM-OCR) when text is below threshold. Applies to
+  PDF (rendered to images via Poppler), DOCX and PPTX (embedded images
+  extracted from the Office ZIP archive). TXT/MD never trigger OCR (no images).
+  OCR is only attempted when embedded images exist. OCR failure does not
+  block ingestion; source marked partial.
 - **FR-25** Chunking, embedding, storage in content-keyed ChromaDB collection.
 - **FR-26** Idempotent: re-uploading same content does not duplicate chunks.
 - **FR-27** Ingestion status surfaced to UI.
@@ -269,7 +272,9 @@ and converse with your notebook by voice.
 - Python 3.13+.
 - No local Ollama for chat or embeddings.
 - ffmpeg required for Video Overview + STT audio normalization.
-- Poppler required for OCR fallback (PDF-to-image).
+- Poppler required for OCR fallback on PDFs (PDF-to-image rendering). DOCX/PPTX
+  OCR uses embedded images extracted directly from the Office ZIP archive (no
+  Poppler dependency for those types).
 
 ## 10. Assumptions
 
