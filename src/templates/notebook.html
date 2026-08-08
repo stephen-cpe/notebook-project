@@ -148,6 +148,7 @@
 <script type="application/json" id="nb-config">
 {"notebook_id": {{ notebook.id }}, "csrf_token": "{{ csrf_token() }}", "voice_enabled": {{ voice_enabled | tojson }}, "voice_max_recording_seconds": {{ voice_max_recording_seconds | default(60) }}}
 </script>
+<script src="{{ url_for('static', filename='js/chat-markdown.js') }}"></script>
 <script src="{{ url_for('static', filename='js/chat-ui.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 {% if voice_enabled %}

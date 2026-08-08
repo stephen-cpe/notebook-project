@@ -38,7 +38,7 @@ def register_blueprints(app: Flask) -> None:
 
     @app.errorhandler(413)
     def payload_too_large(_err: object) -> ViewReturn:
-        """JSON/HTML-friendly 413 for oversized uploads (P0-1.5)."""
+        """JSON/HTML-friendly 413 for oversized uploads."""
         best = request.accept_mimetypes.best_match(["application/json", "text/html"])
         if best == "application/json":
             return jsonify(error="File too large."), 413
@@ -58,7 +58,7 @@ def register_blueprints(app: Flask) -> None:
 
     @app.after_request
     def add_security_headers(resp: Response) -> Response:
-        """Add basic Content-Security-Policy + hardening headers (P0-1.8).
+        """Add basic Content-Security-Policy + hardening headers.
 
         CSP allows the Bootstrap CDN (jsdelivr) plus the app's own origin and
         inline styles (needed for Bootstrap utility classes rendered inline).

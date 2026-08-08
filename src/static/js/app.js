@@ -185,8 +185,10 @@
     var typing = ChatUI.appendTypingIndicator();
     var assistantDiv = typing.div;
     var bubble = typing.bubble;
+    bubble.className += " md-content";
 
     var firstToken = true;
+    var fullText = "";
 
     fetch("/notebooks/" + NB_ID + "/chat", {
       method: "POST",
@@ -217,7 +219,8 @@
                 bubble.textContent = "";
                 firstToken = false;
               }
-              bubble.textContent += data.token;
+              fullText += data.token;
+              bubble.innerHTML = window.ChatMarkdown.render(fullText);
               chatMessages.scrollTop = chatMessages.scrollHeight;
             }
             if (data.done) {

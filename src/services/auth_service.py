@@ -73,7 +73,7 @@ def authenticate(username: str, password: str) -> User:
 
     Disabled users (``role == "disabled"``) are rejected with the same
     ``InvalidCredentialsError`` used for bad credentials so that account
-    state is not leaked through the login flow (P0-1.1).
+    state is not leaked through the login flow.
 
     Raises:
         InvalidCredentialsError: if username is unknown, the password is
@@ -107,7 +107,7 @@ class AuthUser(UserMixin):  # type: ignore[misc]
 
     @property
     def is_active(self) -> bool:
-        """False when the account is disabled (P0-1.1)."""
+        """False when the account is disabled."""
         return self._user.role != ROLE_DISABLED
 
     @property
@@ -165,8 +165,8 @@ def load_user(user_id: str) -> AuthUser | None:
     """Flask-Login callback: load the ``AuthUser`` for the session.
 
     Returns ``None`` for disabled users so existing sessions are invalidated
-    on the next request (P0-1.1). Returning None makes Flask-Login treat the
-    user as anonymous, so ``@login_required`` redirects to the login view.
+    on the next request. Returning None makes Flask-Login treat the user as
+    anonymous, so ``@login_required`` redirects to the login view.
     """
     try:
         uid = int(user_id)

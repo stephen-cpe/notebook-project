@@ -110,6 +110,8 @@ notebook-project/
 |   |   `-- index.py             # redirect
 |   |-- static/
 |   |   |-- css/app.css
+|   |   |-- js/chat-markdown.js    # lightweight markdown-to-HTML renderer (no external libs)
+|   |   |-- js/chat-ui.js        # shared chat helpers (appendMessage, typing indicator, sources)
 |   |   |-- js/app.js            # upload, chat, audio, video, source actions
 |   |   |-- js/voice.js          # push-to-talk recording + voice turn
 |   |   `-- js/settings.js

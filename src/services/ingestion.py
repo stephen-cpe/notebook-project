@@ -105,7 +105,7 @@ class IngestionService:
             logger.info("Skipping re-embedding for existing hash %s", content_hash[:12])
             entry = content_registry_repo.get_by_hash(content_hash)
             if entry is None or not entry.extracted_text:
-                # Collection exists but registry is missing/empty (P0-1.11).
+                # Collection exists but registry is missing/empty.
                 # We cannot recover text here without re-parsing; mark the
                 # source for re-ingestion by deleting the partial collection
                 # and falling through to the normal extract path.
@@ -193,7 +193,7 @@ class IngestionService:
 
         # Store chunks + register in one unit; if the registry write fails after
         # the collection is created, delete the partial collection so a later
-        # retry starts clean (P0-1.11).
+        # retry starts clean.
         try:
             self._vector_store.store_chunks(content_hash, chunks, metadatas)
             content_registry_repo.get_or_create(

@@ -91,7 +91,7 @@ def count_by_content_hash(content_hash: str, exclude_source_id: int | None = Non
     """Count sources referencing ``content_hash`` (for ref-counted cleanup).
 
     Optionally exclude ``exclude_source_id`` (the source being deleted) so the
-    count reflects remaining references after deletion (P0-1.3).
+    count reflects remaining references after deletion.
     """
     q = db.session.query(Source).filter(Source.content_hash == content_hash)
     if exclude_source_id is not None:
@@ -103,7 +103,7 @@ def list_hashes_by_notebook(notebook_id: int) -> list[str]:
     """Return the distinct content hashes used by a notebook's sources.
 
     Used by notebook deletion to know which hashes may need cleanup after the
-    notebook's sources are cascade-deleted (P0-1.3).
+    notebook's sources are cascade-deleted.
     """
     rows = db.session.query(Source.content_hash).filter(Source.notebook_id == notebook_id).all()
     return [r[0] for r in rows]

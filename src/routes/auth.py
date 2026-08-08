@@ -67,7 +67,7 @@ def signup() -> ViewReturn:
     try:
         user = signup_service(username, password)
     except InvalidCredentialsError as exc:
-        # Includes password-policy violations (P0-1.6).
+        # Includes password-policy violations.
         return _render_signup_error(str(exc)), 400
     except DuplicateUsernameError:
         return _render_signup_error("That username is already taken"), 409
@@ -173,7 +173,7 @@ def reset_password() -> ViewReturn:
             flash(f"Password must be at most {PASSWORD_MAX_LENGTH} characters.", "error")
             return redirect(url_for("auth.reset_password"))
 
-        # Require the current password to authorize the change (P0-1.6).
+        # Require the current password to authorize the change.
         user = current_user.get_underlying()
         if not verify_password(current_password, user.password_hash):
             flash("Current password is incorrect.", "error")
@@ -197,5 +197,4 @@ def _render_login_error(message: str) -> str:
     return render_template("auth/login.html")
 
 
-# Re-export for type checkers / tests that import the mixin.
 __all__ = ["auth_bp", "ViewReturn"]

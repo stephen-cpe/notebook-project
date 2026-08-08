@@ -81,8 +81,6 @@ class Config:
     ocr_max_image_dimension: int = field(
         default_factory=lambda: _int("OCR_MAX_IMAGE_DIMENSION", 2048)
     )
-    ocr_max_pages: int = field(default_factory=lambda: _int("OCR_MAX_PAGES", 30))
-    ocr_dpi: int = field(default_factory=lambda: _int("OCR_DPI", 150))
     poppler_path: str = field(default_factory=lambda: os.getenv("POPPLER_PATH", ""))
     # Provider: "local" (default, transformers on CPU/GPU) or "hf_inference"
     # (hosted HF Inference API — no local weights, per-call network latency).
@@ -118,7 +116,7 @@ class Config:
     )
     max_file_size_mb: int = field(default_factory=lambda: _int("MAX_FILE_SIZE_MB", 25))
 
-    # Session cookie hardening (P0-1.7)
+    # Session cookie hardening
     session_cookie_secure: bool = field(
         default_factory=lambda: _bool("SESSION_COOKIE_SECURE", False)
     )
@@ -129,7 +127,7 @@ class Config:
         default_factory=lambda: os.getenv("SESSION_COOKIE_SAMESITE", "Lax")
     )
 
-    # HuggingFace Inference API timeouts/retries (P0-1.9)
+    # HuggingFace Inference API timeouts/retries
     hf_timeout_seconds: int = field(default_factory=lambda: _int("HF_TIMEOUT_SECONDS", 60))
 
     # Audio
@@ -176,14 +174,10 @@ class Config:
     voice_tts_fallback_speaker: str = field(
         default_factory=lambda: os.getenv("VOICE_TTS_FALLBACK_SPEAKER", "Ava")
     )
-    voice_allow_streaming_playback: bool = field(
-        default_factory=lambda: _bool("VOICE_ALLOW_STREAMING_PLAYBACK", True)
-    )
     voice_cors_origins: str = field(default_factory=lambda: os.getenv("VOICE_CORS_ORIGINS", ""))
 
     # CI / test flags
     ci: bool = field(default_factory=lambda: _bool("CI", False))
-    run_integration: bool = field(default_factory=lambda: _bool("RUN_INTEGRATION", False))
 
     def is_test(self) -> bool:
         """True when running under pytest / CI (use in-memory backends, mock AI)."""
@@ -223,8 +217,6 @@ class Config:
             "session_cookie_httponly": self.session_cookie_httponly,
             "session_cookie_samesite": self.session_cookie_samesite,
             "hf_timeout_seconds": self.hf_timeout_seconds,
-            "ocr_max_pages": self.ocr_max_pages,
-            "ocr_dpi": self.ocr_dpi,
             "voice_enabled": self.voice_enabled,
             "voice_stt_provider": self.voice_stt_provider,
             "voice_stt_model": self.voice_stt_model,
@@ -233,7 +225,6 @@ class Config:
             "voice_max_recording_seconds": self.voice_max_recording_seconds,
             "voice_max_upload_mb": self.voice_max_upload_mb,
             "voice_tts_fallback_speaker": self.voice_tts_fallback_speaker,
-            "voice_allow_streaming_playback": self.voice_allow_streaming_playback,
             "audio_voice_a": self.audio_voice_a,
             "audio_voice_b": self.audio_voice_b,
             "audio_format": self.audio_format,
@@ -241,7 +232,6 @@ class Config:
             "overview_max_duration_seconds": self.overview_max_duration_seconds,
             "overview_max_context_chars": self.overview_max_context_chars,
             "ci": self.ci,
-            "run_integration": self.run_integration,
         }
 
 

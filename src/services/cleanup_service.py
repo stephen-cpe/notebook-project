@@ -3,8 +3,8 @@
 When a Source is deleted, the underlying ChromaDB collection and
 ContentRegistry entry are shared across notebooks/users (dedup, NFR-22). They
 must only be removed when no remaining Source references the same
-``content_hash`` (P0-1.3). This service centralizes that reference-counted
-cleanup so the delete routes stay thin.
+``content_hash``. This service centralizes that reference-counted cleanup so
+the delete routes stay thin.
 
 Functions never raise: cleanup is best-effort and logged on failure so a
 storage hiccup never blocks a user-facing delete.
@@ -60,8 +60,8 @@ def cleanup_orphaned_content(content_hash: str, exclude_source_id: int | None = 
 def cleanup_notebook_media(notebook_id: int, data_dir: str) -> None:
     """Delete a notebook's audio and video files (notebook-specific, not shared).
 
-    Called on notebook deletion so the on-disk MP3/MP4 artifacts don't leak
-    (P0-1.3). Best-effort: missing files are ignored.
+    Called on notebook deletion so the on-disk MP3/MP4 artifacts don't leak.
+    Best-effort: missing files are ignored.
     """
     for sub in ("audio", "video", "voice"):
         media_dir = Path(data_dir) / sub / str(notebook_id)

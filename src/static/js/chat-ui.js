@@ -21,7 +21,12 @@
         ? "bg-info text-dark"
         : "bg-body-tertiary border border-secondary");
     bubble.style.maxWidth = "80%";
-    bubble.textContent = text;
+    if (role === "user") {
+      bubble.textContent = text;
+    } else {
+      bubble.className += " md-content";
+      bubble.innerHTML = window.ChatMarkdown.render(text);
+    }
     div.appendChild(bubble);
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;

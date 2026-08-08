@@ -117,7 +117,7 @@ def upload_source(notebook_id: int) -> tuple[Response, int]:
     content_hash = compute_hash(tmp_path)
     existing = source_repo.get_by_notebook_and_hash(notebook_id, content_hash)
     if existing is not None:
-        # Re-ingest the same file ( ChromaDB dedup will skip re-embedding).
+        # Re-ingest the same file (ChromaDB dedup will skip re-embedding).
         from src.services.ingestion import get_ingestion_service
 
         ingest_svc = get_ingestion_service()
@@ -152,7 +152,7 @@ def upload_source(notebook_id: int) -> tuple[Response, int]:
         content_type=content_type,
     )
 
-    # Run ingestion (synchronous for now; background job in later step).
+    # Run ingestion synchronously.
     from src.services.ingestion import get_ingestion_service
 
     ingest_svc = get_ingestion_service()
@@ -190,9 +190,9 @@ def upload_source(notebook_id: int) -> tuple[Response, int]:
 def delete_source(notebook_id: int, source_id: int) -> tuple[Response, int]:
     """Delete a source from a notebook.
 
-    Reference-counted cleanup (P0-1.3): if no other Source row references the
-    same content_hash, the underlying ChromaDB collection and ContentRegistry
-    entry are also removed so content/embeddings don't leak.
+    Reference-counted cleanup: if no other Source row references the same
+    content_hash, the underlying ChromaDB collection and ContentRegistry entry
+    are also removed so content/embeddings don't leak.
     """
     require_owner(notebook_id)
     source = source_repo.get_by_id(source_id)

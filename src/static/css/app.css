@@ -174,6 +174,89 @@ code {
   margin-bottom: 0.4rem;
 }
 
+/* =========================================================================
+   Markdown content — rendered LLM responses
+   ========================================================================= */
+
+.md-content {
+  line-height: 1.6;
+}
+
+.md-content p {
+  margin-bottom: 0.5rem;
+}
+
+.md-content p:last-child {
+  margin-bottom: 0;
+}
+
+.md-content h2,
+.md-content h3,
+.md-content h4 {
+  font-weight: 600;
+  margin-top: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.md-content h2 { font-size: 1.1rem; }
+.md-content h3 { font-size: 1.0rem; }
+.md-content h4 { font-size: 0.9rem; }
+
+.md-content ul,
+.md-content ol {
+  padding-left: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.md-content li {
+  margin-bottom: 0.25rem;
+}
+
+.md-content .md-code {
+  background: rgba(13, 202, 240, 0.12);
+  border-radius: 3px;
+  padding: 0.1rem 0.3rem;
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 0.85em;
+}
+
+.md-content .md-code-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin-bottom: 0.5rem;
+}
+
+.md-content .md-code-block code {
+  font-family: "JetBrains Mono", "Courier New", monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.md-content blockquote {
+  border-left: 3px solid var(--info);
+  padding-left: 0.75rem;
+  margin: 0.5rem 0;
+  color: var(--text-muted);
+}
+
+.md-content .md-hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.75rem 0;
+}
+
+.md-content a {
+  color: var(--info);
+  text-decoration: underline;
+}
+
+.md-content strong {
+  font-weight: 600;
+}
+
 .drop-zone-active {
   border-color: var(--info) !important;
   background-color: rgba(13, 202, 240, 0.05);

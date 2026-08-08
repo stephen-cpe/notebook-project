@@ -13,8 +13,3 @@ from flask_sqlalchemy import SQLAlchemy
 db = SQLAlchemy()
 migrate = Migrate()
 login_manager = LoginManager()
-
-# SocketIO is optional. Lazily imported in app.py only when
-# VOICE_ENABLED=true and flask_socketio is installed; stays None otherwise so
-# the core app remains bootable without the voice dependencies.
-socketio = None

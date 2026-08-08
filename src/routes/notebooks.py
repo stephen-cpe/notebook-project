@@ -95,10 +95,10 @@ def rename_notebook(notebook_id: int) -> ViewReturn:
 def delete_notebook(notebook_id: int) -> ViewReturn:
     """Delete a notebook (cascades to sources + chat).
 
-    Reference-counted cleanup (P0-1.3): the notebook's audio/video/voice files
-    are deleted (notebook-specific), and each source's shared ChromaDB
-    collection + ContentRegistry entry is removed if no other notebook
-    references the same content hash.
+    Reference-counted cleanup: the notebook's audio/video/voice files are
+    deleted (notebook-specific), and each source's shared ChromaDB collection +
+    ContentRegistry entry is removed if no other notebook references the same
+    content hash.
     """
     from flask import current_app
 

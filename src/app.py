@@ -37,9 +37,9 @@ def create_app(config: Config | None = None) -> Flask:
     # Tests use SQLite in-memory; production requires PostgreSQL.
     db_uri = cfg.test_database_url if cfg.is_test() else cfg.database_url
     # For in-memory SQLite, use a StaticPool + check_same_thread=False so all
-    # threads/contexts share ONE in-memory database (P0-2.26). Without this,
-    # each connection from the pool gets its own empty :memory: DB and writes
-    # in one app_context (e.g. disabling a user in a test) are invisible to the
+    # threads/contexts share ONE in-memory database. Without this, each
+    # connection from the pool gets its own empty :memory: DB and writes in one
+    # app_context (e.g. disabling a user in a test) are invisible to the
     # request context, breaking session-invalidation tests and background jobs.
     if db_uri == "sqlite:///:memory:":
         from sqlalchemy.pool import StaticPool
@@ -56,11 +56,11 @@ def create_app(config: Config | None = None) -> Flask:
     app.config["NOTEBOOK_CONFIG"] = cfg
     app.config["WTF_CSRF_ENABLED"] = not cfg.is_test()
 
-    # --- Request size limit (P0-1.5) ---
+    # --- Request size limit ---
     # max_file_size_mb plus a 2 MB margin for multipart overhead.
     app.config["MAX_CONTENT_LENGTH"] = (cfg.max_file_size_mb + 2) * 1024 * 1024
 
-    # --- Session cookie hardening (P0-1.7) ---
+    # --- Session cookie hardening ---
     app.config["SESSION_COOKIE_HTTPONLY"] = cfg.session_cookie_httponly
     app.config["SESSION_COOKIE_SAMESITE"] = cfg.session_cookie_samesite
     # SECURE defaults False for local HTTP; set True in production over HTTPS.
@@ -187,10 +187,10 @@ def create_app(config: Config | None = None) -> Flask:
 
     app.logger.info("notebook-project app created (chat_model=%s)", cfg.chat_model)
 
-    # --- Admin seeding command (P0-1.4) ---
+    # --- Admin seeding command ---
     _register_seed_admin_command(app)
 
-    # --- Non-test start guard for default admin password (P0-1.4) ---
+    # --- Non-test start guard for default admin password ---
     if not cfg.is_test() and cfg.admin_password == "change-me":  # noqa: S105
         app.logger.warning(
             "ADMIN_PASSWORD is still the default 'change-me'. "
@@ -201,7 +201,7 @@ def create_app(config: Config | None = None) -> Flask:
 
 
 def _register_seed_admin_command(app: Flask) -> None:
-    """Register an idempotent ``flask seed-admin`` command (P0-1.4)."""
+    """Register an idempotent ``flask seed-admin`` command."""
 
     @app.cli.command("seed-admin")
     def seed_admin() -> None:  # noqa: ANN202

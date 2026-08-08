@@ -6,10 +6,6 @@ cached extracted text, enabling cross-user dedup and corruption recovery.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
-from sqlalchemy import select
-
 from src.extensions import db
 from src.models import ContentRegistry
 
@@ -45,9 +41,9 @@ def get_or_create(
 ) -> ContentRegistry:
     """Return an existing entry, or create one if it does not exist.
 
-    Race-safe (P0-1.11): concurrent inserts on the primary key are handled by
-    catching ``IntegrityError``, rolling back, and re-fetching the existing
-    row inserted by the winning transaction.
+    Race-safe: concurrent inserts on the primary key are handled by catching
+    ``IntegrityError``, rolling back, and re-fetching the existing row inserted
+    by the winning transaction.
     """
     existing = get_by_hash(content_hash)
     if existing is not None:
@@ -64,11 +60,6 @@ def get_or_create(
             if existing is not None:
                 return existing
         raise
-
-
-def list_all() -> Sequence[ContentRegistry]:
-    """Return all registry entries (admin/diagnostic view)."""
-    return db.session.scalars(select(ContentRegistry).order_by(ContentRegistry.created_at)).all()
 
 
 def delete_entry(content_hash: str) -> None:

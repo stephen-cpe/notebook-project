@@ -295,7 +295,7 @@ class _HfInferenceBackend:
 
     @staticmethod
     def _call_with_retry(fn: Any) -> Any:  # noqa: ANN401
-        """Call ``fn`` once, retry once on a transient network error (P0-1.9)."""
+        """Call ``fn`` once, retry once on a transient network error."""
         import time
 
         try:
