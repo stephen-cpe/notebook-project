@@ -91,19 +91,20 @@ def chat_history(notebook_id: int) -> tuple[Response, int]:
     """Return chat history for a notebook (JSON)."""
     require_owner(notebook_id)
     messages = chat_repo.list_by_notebook(notebook_id)
-    return (
-        jsonify(
-            messages=[
-                {
-                    "id": m.id,
-                    "role": m.role,
-                    "content": m.content,
-                    "sources": json.loads(m.sources_json) if m.sources_json else [],
-                    "latency_ms": m.latency_ms,
-                    "created_at": m.created_at.isoformat() if m.created_at else None,
-                }
-                for m in messages
-            ]
-        ),
-        200,
-    )
+    out = []
+    for m in messages:
+        try:
+            sources = json.loads(m.sources_json) if m.sources_json else []
+        except (ValueError, TypeError):
+            sources = []
+        out.append(
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "sources": sources,
+                "latency_ms": m.latency_ms,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+        )
+    return jsonify(messages=out), 200

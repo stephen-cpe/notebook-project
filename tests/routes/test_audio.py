@@ -72,6 +72,19 @@ class TestRequestAudio:
         res = client.post(f"/notebooks/{nb_id}/audio")
         assert res.status_code == 404
 
+    def test_busy_returns_409(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A second launch while a job is transient must be rejected."""
+        nb_id = _create_notebook_with_source(client, app, monkeypatch, "audroute6")
+        with app.app_context():
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            nb.audio_status = "synthesizing"
+            db.session.commit()
+        res = client.post(f"/notebooks/{nb_id}/audio")
+        assert res.status_code == 409
+
 
 class TestAudioStatus:
     def test_returns_status(
@@ -83,6 +96,21 @@ class TestAudioStatus:
         data = res.get_json()
         assert "status" in data
         assert "has_audio" in data
+        assert "error" in data
+
+    def test_status_missing_file_reports_no_audio(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stale path pointing at a deleted file must not claim audio exists."""
+        nb_id = _create_notebook_with_source(client, app, monkeypatch, "audroute7")
+        with app.app_context():
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            nb.audio_status = "ready"
+            nb.audio_path = "/nonexistent/missing.mp3"
+            db.session.commit()
+        res = client.get(f"/notebooks/{nb_id}/audio/status")
+        assert res.get_json()["has_audio"] is False
 
 
 class TestDeleteAudio:
@@ -103,3 +131,19 @@ class TestDeleteAudio:
                 db.session.refresh(nb)
                 assert nb.audio_status == "none"
                 assert nb.audio_path is None
+
+    def test_delete_bumps_generation(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Delete must invalidate a still-running job's generation."""
+        nb_id = _create_notebook_with_source(client, app, monkeypatch, "audroute8")
+        with app.app_context():
+            before = db.session.get(Notebook, nb_id)
+            assert before is not None
+            gen_before = before.audio_generation
+        res = client.delete(f"/notebooks/{nb_id}/audio")
+        assert res.status_code == 200
+        with app.app_context():
+            after = db.session.get(Notebook, nb_id)
+            assert after is not None
+            assert after.audio_generation == gen_before + 1

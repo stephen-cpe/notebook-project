@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from functools import wraps
 from typing import Any
@@ -11,6 +12,8 @@ from flask_login import current_user
 
 from src.models import Notebook
 from src.repositories import notebook_repo
+
+logger = logging.getLogger(__name__)
 
 
 def require_owner(notebook_id: int) -> Notebook:
@@ -43,3 +46,20 @@ def _current_user_id() -> int:
     """Return the current user's ID as an int."""
     uid = current_user.get_id()
     return int(uid) if uid else 0
+
+
+def trigger_summary_job(notebook_id: int) -> None:
+    """Fire-and-forget an automatic summary regeneration for a notebook.
+
+    Best-effort: a thread-start failure is logged and never breaks the
+    user-facing request. The job itself is idempotent (content-signature
+    keyed), so redundant triggers are cheap no-ops.
+    """
+    try:
+        from flask import current_app
+
+        from src.services.jobs import launch_summary_job
+
+        launch_summary_job(notebook_id, current_app._get_current_object())  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        logger.exception("Could not launch summary job for notebook %d", notebook_id)

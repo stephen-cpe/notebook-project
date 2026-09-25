@@ -218,3 +218,95 @@ class TestExtractPptxImages:
         from src.services.document_parser import extract_pptx_images
 
         assert extract_pptx_images("nonexistent_12345.pptx") == []
+
+
+class TestArchiveResourceBounds:
+    def test_member_count_cap(self, tmp_path: Path) -> None:
+        """An archive with too many media members yields no images."""
+        import zipfile
+
+        from src.services.document_parser import _extract_zip_media
+
+        p = tmp_path / "many.docx"
+        with zipfile.ZipFile(p, "w") as z:
+            for i in range(101):
+                z.writestr(f"word/media/img{i}.png", b"x")
+        assert _extract_zip_media(str(p), "word/media/") == []
+
+    def test_oversized_member_skipped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Members over the per-member cap are skipped, not loaded."""
+        import zipfile
+
+        import src.services.document_parser as parser_mod
+        from src.services.document_parser import _extract_zip_media
+
+        p = tmp_path / "big.docx"
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("word/media/img0.png", b"y" * 64)
+        monkeypatch.setattr(parser_mod, "_MAX_ARCHIVE_MEMBER_BYTES", 10)
+        assert _extract_zip_media(str(p), "word/media/") == []
+
+    def test_normal_archive_unaffected(self) -> None:
+        """Ordinary fixtures still extract (bounds don't break real files)."""
+        from src.services.document_parser import extract_docx_images
+
+        images = extract_docx_images(str(FIXTURES / "_ocr_with_image.docx"))
+        assert len(images) == 1
+
+
+# ---------------------------------------------------------------------------
+# Location-aware units (true pages/slides, None for pageless content)
+# ---------------------------------------------------------------------------
+
+
+class TestExtractUnits:
+    def test_pdf_units_carry_real_page_numbers(self) -> None:
+        from src.services.document_parser import extract_units
+
+        units, page_count = extract_units(str(FIXTURES / "sample.pdf"), "pdf")
+        assert page_count == 2
+        assert len(units) >= 1
+        pages = {u.page for u in units}
+        assert pages <= {1, 2}
+        assert 1 in pages
+
+    def test_pptx_units_carry_slide_numbers(self) -> None:
+        from src.services.document_parser import extract_units
+
+        units, slide_count = extract_units(str(FIXTURES / "sample.pptx"), "pptx")
+        assert slide_count is not None and slide_count >= 1
+        assert len(units) >= 1
+        for u in units:
+            assert u.page is not None and 1 <= u.page <= slide_count
+
+    def test_txt_unit_has_no_page(self) -> None:
+        from src.services.document_parser import extract_units
+
+        units, page_count = extract_units(str(FIXTURES / "sample.txt"), "txt")
+        assert page_count is None
+        assert len(units) == 1
+        assert units[0].page is None
+
+    def test_docx_tables_extracted(self, tmp_path: Path) -> None:
+        """Table cell text must not be silently dropped."""
+        from docx import Document
+
+        from src.services.document_parser import extract_units, parse_docx
+
+        p = tmp_path / "tabled.docx"
+        doc = Document()
+        doc.add_paragraph("Intro paragraph.")
+        table = doc.add_table(rows=2, cols=2)
+        table.cell(0, 0).text = "Alpha"
+        table.cell(0, 1).text = "Beta"
+        table.cell(1, 0).text = "Gamma"
+        table.cell(1, 1).text = "Delta"
+        doc.save(p)
+
+        assert "Alpha" in parse_docx(str(p))
+        assert "Delta" in parse_docx(str(p))
+        units, page_count = extract_units(str(p), "docx")
+        assert page_count is None
+        assert any("Gamma" in u.text for u in units)

@@ -31,7 +31,6 @@ from src.services.rag_retriever import (
     reset_rag_retriever,
 )
 from src.services.vector_store import (
-    get_collection_name,
     get_vector_store,
     reset_vector_store,
 )
@@ -185,7 +184,7 @@ class TestCorruptionRecovery:
         with app.app_context():
             content_registry_repo.get_or_create(
                 content_hash=target_hash,
-                chroma_collection=get_collection_name(target_hash),
+                chroma_collection=retriever._vector_store.collection_name(target_hash),
                 extracted_text=cached_text,
                 char_count=len(cached_text),
             )
@@ -197,6 +196,68 @@ class TestCorruptionRecovery:
 
         assert len(results) >= 1
         assert retriever._vector_store.collection_exists(target_hash) is True
+
+
+class TestFilenameAliasMap:
+    def test_alias_map_overrides_stored_filename(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Citations must show the requesting notebook's name, not the first uploader's."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        hashes, _ = _ingest_two_sources(app)
+        retriever = RAGRetriever()
+
+        with app.app_context():
+            results = retriever.retrieve_with_sources(
+                [hashes[0]],
+                "databases",
+                top_k=3,
+                filenames={hashes[0]: "my-renamed-copy.txt"},
+            )
+        assert len(results) >= 1
+        assert results[0]["filename"] == "my-renamed-copy.txt"
+
+    def test_without_alias_map_uses_stored_filename(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        hashes, _ = _ingest_two_sources(app)
+        retriever = RAGRetriever()
+
+        with app.app_context():
+            results = retriever.retrieve_with_sources([hashes[0]], "databases", top_k=3)
+        assert len(results) >= 1
+        assert results[0]["filename"] == "sample.txt"
+
+    def test_query_embedded_once_across_collections(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One embedding call per chat, not one per source collection."""
+        from src.services.embeddings import EmbeddingService
+
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        hashes, _ = _ingest_two_sources(app)
+
+        calls = 0
+        orig = EmbeddingService.embed_query
+
+        def _counting(self: object, text: str) -> list[float]:
+            nonlocal calls
+            calls += 1
+            return orig(self, text)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(EmbeddingService, "embed_query", _counting)
+        retriever = RAGRetriever()
+        with app.app_context():
+            results = retriever.retrieve_with_sources(hashes, "databases", top_k=3)
+        assert len(results) >= 1
+        assert calls == 1
 
 
 # ---------------------------------------------------------------------------

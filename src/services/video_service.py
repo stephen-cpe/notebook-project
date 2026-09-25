@@ -44,6 +44,11 @@ ACCENT_COLOR = (13, 202, 240)
 TEXT_COLOR = (224, 230, 240)
 MUTED_COLOR = (139, 149, 167)
 
+#: Slide duration when its narration is missing (seconds).
+DEFAULT_SLIDE_SECONDS = 5.0
+#: Breathing room appended after each narration so slides never cut audio off.
+SLIDE_TAIL_SECONDS = 0.5
+
 MARGIN_LEFT = 100
 MARGIN_RIGHT = 100
 MARGIN_TOP = 80
@@ -113,16 +118,20 @@ class VideoService:
         notebook: Notebook,
         slides: list[dict[str, Any]],
         speaker: str,
+        job_id: str | None = None,
+        generation: int | None = None,
     ) -> VideoResult:
         """Generate slide images + TTS narration + combine into MP4."""
+        import uuid
+
         if not slides:
-            self._set_status(notebook, VIDEO_STATUS_FAILED)
+            self._set_failed(notebook, "No slides to render.")
             return VideoResult(
                 status=VIDEO_STATUS_FAILED, video_path=None, error="No slides to render."
             )
 
         if not self._mock and not _ffmpeg_available():
-            self._set_status(notebook, VIDEO_STATUS_FAILED)
+            self._set_failed(notebook, "ffmpeg is not installed.")
             return VideoResult(
                 status=VIDEO_STATUS_FAILED,
                 video_path=None,
@@ -139,10 +148,12 @@ class VideoService:
         output_path = str(video_dir / f"{sig}.mp4")
 
         if self._mock:
-            return self._mock_generate(output_path, notebook)
+            return self._mock_generate(output_path, notebook, generation)
 
-        temp_dir = video_dir / "tmp"
-        temp_dir.mkdir(exist_ok=True)
+        # Job-isolated temp directory (never the shared fixed "tmp/" name).
+        jid = job_id or uuid.uuid4().hex[:8]
+        temp_dir = video_dir / f"tmp_{jid}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             slide_files: list[str] = []
@@ -161,26 +172,45 @@ class VideoService:
                 else:
                     audio_files.append("")
 
+            if not any(a and Path(a).exists() for a in audio_files):
+                self._set_failed(notebook, "All narrations failed to synthesize.")
+                return VideoResult(
+                    status=VIDEO_STATUS_FAILED,
+                    video_path=None,
+                    error="All narrations failed to synthesize.",
+                )
+
             self._combine_to_mp4(slide_files, audio_files, output_path)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
-            for f in slide_files + audio_files:
-                Path(f).unlink(missing_ok=True)
-
-            notebook.video_path = output_path
-            notebook.video_status = VIDEO_STATUS_READY
-            db.session.commit()
-
-            logger.info(
-                "Video generated for notebook %d: %d slides, file=%s",
-                notebook.id,
-                len(slides),
-                output_path,
+        if self._is_superseded(notebook, generation):
+            Path(output_path).unlink(missing_ok=True)
+            logger.warning(
+                "Video result for notebook %d discarded (superseded generation)", notebook.id
             )
-            return VideoResult(status=VIDEO_STATUS_READY, video_path=output_path)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Video generation failed for notebook %d: %s", notebook.id, exc)
-            self._set_status(notebook, VIDEO_STATUS_FAILED)
-            return VideoResult(status=VIDEO_STATUS_FAILED, video_path=None, error=str(exc))
+            return VideoResult(
+                status=VIDEO_STATUS_FAILED,
+                video_path=None,
+                error="Superseded by a newer job.",
+            )
+
+        # Persist, removing the superseded artifact if replaced.
+        previous = notebook.video_path
+        notebook.video_path = output_path
+        notebook.video_status = VIDEO_STATUS_READY
+        notebook.video_error = None
+        db.session.commit()
+        if previous and previous != output_path:
+            Path(previous).unlink(missing_ok=True)
+
+        logger.info(
+            "Video generated for notebook %d: %d slides, file=%s",
+            notebook.id,
+            len(slides),
+            output_path,
+        )
+        return VideoResult(status=VIDEO_STATUS_READY, video_path=output_path)
 
     def _render_slide(self, slide: dict[str, Any], output_path: str) -> None:
         img = Image.new("RGB", (SLIDE_WIDTH, SLIDE_HEIGHT), BG_COLOR)
@@ -232,86 +262,138 @@ class VideoService:
     def _combine_to_mp4(
         self, slide_files: list[str], audio_files: list[str], output_path: str
     ) -> None:
+        """Combine slides + narration into one MP4 with an aligned timeline.
+
+        Each slide is shown for exactly its narration duration plus a short
+        tail; slides without narration show for the default duration backed
+        by generated silence. The audio track is built from the same segment
+        durations, so narration never drifts to the wrong slide and the final
+        video is never truncated mid-sentence. ``-shortest`` remains only as
+        a guard against rounding differences.
+        """
+        work_dir = Path(output_path).parent
+        durations: list[float] = []
+        for i in range(len(slide_files)):
+            audio = audio_files[i] if i < len(audio_files) else ""
+            if audio and Path(audio).exists():
+                durations.append(self._get_audio_duration(audio) + SLIDE_TAIL_SECONDS)
+            else:
+                durations.append(DEFAULT_SLIDE_SECONDS)
+
         concat_file = str(Path(output_path).with_suffix(".txt"))
         lines: list[str] = []
         for i, img in enumerate(slide_files):
-            duration = 5.0
-            if i < len(audio_files) and audio_files[i] and Path(audio_files[i]).exists():
-                duration = self._get_audio_duration(audio_files[i]) + 0.5
             abs_img = str(Path(img).resolve())
             lines.append(f"file '{abs_img}'")
-            lines.append(f"duration {duration:.1f}")
+            lines.append(f"duration {durations[i]:.1f}")
         abs_last = str(Path(slide_files[-1]).resolve())
         lines.append(f"file '{abs_last}'")
 
         Path(concat_file).write_text("\n".join(lines), encoding="utf-8")
 
         audio_present = any(a and Path(a).exists() for a in audio_files)
+        generated_silences: list[str] = []
 
-        if audio_present:
-            audio_concat = str(Path(output_path).with_suffix(".audio.txt"))
-            audio_lines = [
-                f"file '{str(Path(a).resolve())}'" for a in audio_files if a and Path(a).exists()
-            ]
-            Path(audio_concat).write_text("\n".join(audio_lines), encoding="utf-8")
+        try:
+            if audio_present:
+                pad_file = str(work_dir / "silence_pad.mp3")
+                self._make_silence(SLIDE_TAIL_SECONDS, pad_file)
+                generated_silences.append(pad_file)
+                track: list[str] = []
+                for i in range(len(slide_files)):
+                    audio = audio_files[i] if i < len(audio_files) else ""
+                    if audio and Path(audio).exists():
+                        track += [audio, pad_file]
+                    else:
+                        sil = str(work_dir / f"silence_slide_{i:04d}.mp3")
+                        self._make_silence(durations[i], sil)
+                        generated_silences.append(sil)
+                        track.append(sil)
+                audio_concat = str(Path(output_path).with_suffix(".audio.txt"))
+                audio_lines = [f"file '{str(Path(a).resolve())}'" for a in track]
+                Path(audio_concat).write_text("\n".join(audio_lines), encoding="utf-8")
 
-            subprocess.run(  # noqa: S603
-                [  # noqa: S607
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    concat_file,
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    audio_concat,
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-c:a",
-                    "aac",
-                    "-shortest",
-                    "-vf",
-                    f"scale={SLIDE_WIDTH}:{SLIDE_HEIGHT}",
-                    output_path,
-                ],
-                capture_output=True,
-                check=True,
-                timeout=120,
-            )
-            Path(audio_concat).unlink(missing_ok=True)
-        else:
-            subprocess.run(  # noqa: S603
-                [  # noqa: S607
-                    "ffmpeg",
-                    "-y",
-                    "-f",
-                    "concat",
-                    "-safe",
-                    "0",
-                    "-i",
-                    concat_file,
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-vf",
-                    f"scale={SLIDE_WIDTH}:{SLIDE_HEIGHT}",
-                    output_path,
-                ],
-                capture_output=True,
-                check=True,
-                timeout=120,
-            )
+                subprocess.run(  # noqa: S603
+                    [  # noqa: S607
+                        "ffmpeg",
+                        "-y",
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        concat_file,
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        audio_concat,
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-shortest",
+                        "-vf",
+                        f"scale={SLIDE_WIDTH}:{SLIDE_HEIGHT}",
+                        output_path,
+                    ],
+                    capture_output=True,
+                    check=True,
+                    timeout=120,
+                )
+                Path(audio_concat).unlink(missing_ok=True)
+            else:
+                subprocess.run(  # noqa: S603
+                    [  # noqa: S607
+                        "ffmpeg",
+                        "-y",
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        concat_file,
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-vf",
+                        f"scale={SLIDE_WIDTH}:{SLIDE_HEIGHT}",
+                        output_path,
+                    ],
+                    capture_output=True,
+                    check=True,
+                    timeout=120,
+                )
+        finally:
+            Path(concat_file).unlink(missing_ok=True)
+            for sil in generated_silences:
+                Path(sil).unlink(missing_ok=True)
 
-        Path(concat_file).unlink(missing_ok=True)
+    @staticmethod
+    def _make_silence(duration: float, output_path: str) -> None:
+        """Generate a silent MP3 of ``duration`` seconds via ffmpeg."""
+        subprocess.run(  # noqa: S603
+            [  # noqa: S607
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=stereo",
+                "-t",
+                f"{max(duration, 0.1):.1f}",
+                "-c:a",
+                "libmp3lame",
+                output_path,
+            ],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
 
     @staticmethod
     def _get_audio_duration(path: str) -> float:
@@ -335,28 +417,75 @@ class VideoService:
         except Exception:
             return 5.0
 
-    def _mock_generate(self, output_path: str, notebook: Notebook) -> VideoResult:
+    def _mock_generate(
+        self, output_path: str, notebook: Notebook, generation: int | None = None
+    ) -> VideoResult:
+        if self._is_superseded(notebook, generation):
+            logger.warning(
+                "Video result for notebook %d discarded (superseded generation)", notebook.id
+            )
+            return VideoResult(
+                status=VIDEO_STATUS_FAILED, video_path=None, error="Superseded by a newer job."
+            )
         Path(output_path).write_bytes(b"stub mp4")
+        previous = notebook.video_path
         notebook.video_path = output_path
         notebook.video_status = VIDEO_STATUS_READY
+        notebook.video_error = None
         db.session.commit()
+        if previous and previous != output_path:
+            Path(previous).unlink(missing_ok=True)
         return VideoResult(status=VIDEO_STATUS_READY, video_path=output_path)
 
     def _set_status(self, notebook: Notebook, status: str) -> None:
         notebook.video_status = status
         db.session.commit()
 
+    def _set_failed(self, notebook: Notebook, error: str) -> None:
+        """Mark the notebook's video job failed with a user-visible reason."""
+        notebook.video_status = VIDEO_STATUS_FAILED
+        notebook.video_error = error
+        db.session.commit()
+
+    @staticmethod
+    def _is_superseded(notebook: Notebook, generation: int | None) -> bool:
+        """True when this job's result must be discarded (relaunch/delete raced it)."""
+        if generation is None:
+            return False
+        try:
+            db.session.refresh(notebook)
+        except Exception:  # noqa: BLE001
+            return True
+        return notebook.video_generation != generation or notebook.video_status == "none"
+
 
 def generate_video_for_notebook(
-    notebook_id: int, topic: str = "", speaker: str = "Ava"
+    notebook_id: int,
+    topic: str = "",
+    speaker: str = "Ava",
+    job_id: str | None = None,
+    generation: int | None = None,
 ) -> VideoResult | None:
-    """Full pipeline: script -> render slides -> TTS narration -> combine -> persist."""
+    """Full pipeline: script -> render slides -> TTS narration -> combine -> persist.
+
+    Returns ``VideoResult`` or ``None`` on failure. A job whose generation no
+    longer matches (relaunch/delete raced it) exits without persisting.
+    """
     notebook = notebook_repo.get_by_id(notebook_id)
     if notebook is None:
         logger.error("Notebook %d not found for video generation", notebook_id)
         return None
+    if generation is not None and notebook.video_generation != generation:
+        logger.info(
+            "Video job for notebook %d is stale (job %s, current %s); exiting.",
+            notebook_id,
+            generation,
+            notebook.video_generation,
+        )
+        return None
 
     notebook.video_status = VIDEO_STATUS_SCRIPTING
+    notebook.video_error = None
     db.session.commit()
     logger.info("Video generation: scripting for notebook %d", notebook_id)
 
@@ -365,6 +494,7 @@ def generate_video_for_notebook(
     if not slides:
         logger.error("Video generation: no slides produced for notebook %d", notebook_id)
         notebook.video_status = VIDEO_STATUS_FAILED
+        notebook.video_error = "No slides could be generated."
         db.session.commit()
         return VideoResult(
             status=VIDEO_STATUS_FAILED,
@@ -379,6 +509,20 @@ def generate_video_for_notebook(
     )
 
     svc = VideoService()
-    result = svc.generate_video(notebook, slides, speaker)
+    try:
+        result = svc.generate_video(notebook, slides, speaker, job_id=job_id, generation=generation)
+    except Exception:  # noqa: BLE001
+        logger.exception("Video generation crashed for notebook %d", notebook_id)
+        try:
+            fresh = notebook_repo.get_by_id(notebook_id)
+            if fresh is not None and (generation is None or fresh.video_generation == generation):
+                fresh.video_status = VIDEO_STATUS_FAILED
+                fresh.video_error = "Generation crashed unexpectedly."
+                db.session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("Could not mark video failed for notebook %d", notebook_id)
+        return VideoResult(
+            status=VIDEO_STATUS_FAILED, video_path=None, error="Generation crashed unexpectedly."
+        )
     logger.info("Video generation result: notebook=%d status=%s", notebook_id, result.status)
     return result

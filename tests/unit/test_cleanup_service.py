@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from src.services.cleanup_service import (
     cleanup_notebook_media,
     cleanup_notebook_orphaned_content,
@@ -76,3 +78,22 @@ class TestCleanupOrphanedContent:
             content_registry_repo.create_entry("list_h", "doc_list", "text", 4)
             cleanup_notebook_orphaned_content(["list_h"])
             assert content_registry_repo.get_by_hash("list_h") is None
+
+    def test_keeps_registry_when_vector_deletion_fails(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed vector delete must not destroy the only recovery copy."""
+        import src.services.cleanup_service as cleanup_mod
+
+        class _FailingStore:
+            def delete_collection(self, content_hash: str) -> bool:
+                return False
+
+        monkeypatch.setattr(cleanup_mod, "get_vector_store", lambda: _FailingStore())
+        with app.app_context():
+            from src.repositories import content_registry_repo
+
+            content_registry_repo.create_entry("fail_h", "doc_fail", "text", 4)
+            removed = cleanup_orphaned_content("fail_h")
+            assert removed is False
+            assert content_registry_repo.get_by_hash("fail_h") is not None

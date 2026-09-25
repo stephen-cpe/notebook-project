@@ -107,6 +107,11 @@ class TestExtractFinalAnswer:
     def test_empty_string(self) -> None:
         assert extract_final_answer("") == ""
 
+    def test_thought_only_returns_empty(self) -> None:
+        """A thought-only response must not leak reasoning as the answer."""
+        raw = "<|channel|thought\nSecret internal reasoning.\n<channel|>"
+        assert extract_final_answer(raw) == ""
+
 
 # ---------------------------------------------------------------------------
 # Mock chat (sync)
@@ -432,6 +437,70 @@ class TestRealStream:
         ):
             list(client.stream([{"role": "user", "content": "hi"}]))
         assert "timed out" in str(excinfo.value)
+
+    def test_stream_strips_thinking_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Thinking blocks must not reach stream consumers (parity with chat())."""
+        client = _real_client(monkeypatch)
+        lines = [
+            '{"message": {"content": "<|channel|thought\\nsecret reasoning"}}',
+            '{"message": {"content": "<channel|>Hello"}}',
+            '{"message": {"content": " world"}}',
+        ]
+        resp = _FakeResp(lines=lines)
+        with patch("src.services.ollama_client.requests.post", return_value=resp):
+            chunks = list(client.stream([{"role": "user", "content": "hi"}]))
+        assert "".join(chunks) == "Hello world"
+
+    def test_stream_handles_split_thinking_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A thinking marker straddling two tokens must never leak partially."""
+        client = _real_client(monkeypatch)
+        lines = [
+            '{"message": {"content": "Hi <|chan"}}',
+            '{"message": {"content": "nel|thought\\nhmm<channel|> there"}}',
+        ]
+        resp = _FakeResp(lines=lines)
+        with patch("src.services.ollama_client.requests.post", return_value=resp):
+            chunks = list(client.stream([{"role": "user", "content": "hi"}]))
+        joined = "".join(chunks)
+        assert "hmm" not in joined
+        assert "<|" not in joined
+        assert joined == "Hi  there"
+
+    def test_no_retry_after_first_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A mid-stream failure must raise, not re-emit from the start."""
+        client = _real_client(monkeypatch)
+        calls = 0
+
+        def _flaky(messages: object) -> object:
+            nonlocal calls
+            calls += 1
+            yield "partial"
+            raise ConnectionError("mid-stream drop")
+
+        with (
+            patch.object(client, "_real_stream", side_effect=_flaky),
+            pytest.raises(Exception) as excinfo,
+        ):
+            list(client.stream([{"role": "user", "content": "hi"}]))
+        assert calls == 1
+        assert "Stream failed" in str(excinfo.value)
+
+    def test_retries_before_first_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A pre-stream failure still gets one retry."""
+        client = _real_client(monkeypatch)
+        calls = 0
+
+        def _flaky(messages: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ConnectionError("connect fail")
+            yield "recovered"
+
+        with patch.object(client, "_real_stream", side_effect=_flaky):
+            chunks = list(client.stream([{"role": "user", "content": "hi"}]))
+        assert chunks == ["recovered"]
+        assert calls == 2
 
 
 # ---------------------------------------------------------------------------

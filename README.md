@@ -80,19 +80,39 @@ psql -U postgres
 
 #### 4b. Create the database and user
 
-Inside the `psql` prompt, run:
+Inside the `psql` prompt, run. This block is idempotent and safe to re-run
+for a from-scratch reset: it creates the role only when missing, resets its
+password, and rebuilds the database.
 
 ```sql
--- Only run these if you want to start from scratch
-DROP DATABASE IF EXISTS notebook_project;
-DROP USER IF EXISTS notebook_user;
+-- Safe to re-run: creates the role if missing, resets its password.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'notebook_user') THEN
+    EXECUTE 'CREATE ROLE notebook_user LOGIN PASSWORD ''notebook_pass''';
+  END IF;
+END $$;
+ALTER ROLE notebook_user WITH PASSWORD 'notebook_pass';
 
-CREATE USER notebook_user WITH PASSWORD 'notebook_pass';
+-- Rebuild the database from scratch. WITH (FORCE) disconnects any
+-- lingering sessions (PostgreSQL 13+).
+DROP DATABASE IF EXISTS notebook_project WITH (FORCE);
 CREATE DATABASE notebook_project;
 ALTER DATABASE notebook_project OWNER TO notebook_user;
+
+-- Connect to the new database before granting schema privileges:
+-- running this GRANT while connected to `postgres` attaches the privilege
+-- to the wrong database and blocks a future `DROP USER notebook_user`.
+\c notebook_project
 GRANT CREATE ON SCHEMA public TO notebook_user;
 \q
 ```
+
+> Note: because `notebook_project` is owned by `notebook_user`, the owner
+> already has `CREATE` on the `public` schema in modern PostgreSQL; the
+> `GRANT` is kept for setups where the app role does not own the database.
+> The `\c` line is what keeps a later `DROP USER` working — without it the
+> privilege is attached to the wrong database.
 
 #### 4c. Initialize the database schema + seed admin
 
@@ -208,7 +228,7 @@ Tests run fully offline:
 - SQLAlchemy uses a temporary file-based SQLite database (per-test isolation);
   PostgreSQL-only validation is bypassed per-test.
 
-CI enforces 80% coverage (`--cov-fail-under=80`); the current suite is at 89%.
+CI enforces 80% coverage (`--cov-fail-under=80`); the current suite is at 88%.
 
 Integration tests (real Ollama Cloud / real HuggingFace model loads) are
 gated behind `RUN_INTEGRATION=1`:
@@ -253,4 +273,4 @@ and has not undergone comprehensive testing.
 
 ## License
 
-MIT
+MIT License — see [LICENSE](LICENSE) for details.

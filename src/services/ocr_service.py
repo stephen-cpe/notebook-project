@@ -60,6 +60,8 @@ class OCRService:
         self._enabled: bool = bool(config.ocr_fallback_enabled)
         self._mock: bool = bool(config.ai_mock)
         self._max_dim: int = config.ocr_max_image_dimension
+        self._max_pages: int = max(1, config.ocr_max_pages)
+        self._dpi: int = max(72, config.ocr_dpi)
         self._poppler_path: str = config.poppler_path
         self._hf_token: str = config.hf_token
         self.provider: str = config.ocr_provider
@@ -90,7 +92,11 @@ class OCRService:
         return self._backend.ocr_image(image, prompt)
 
     def ocr_pdf(self, pdf_path: str, prompt: str = OCR_PROMPT_TEXT) -> str:
-        """Render a PDF to images and OCR each page. Returns "" if disabled."""
+        """Render a PDF to images and OCR each page. Returns "" if disabled.
+
+        At most ``OCR_MAX_PAGES`` pages are rendered; any remainder is
+        reported in a trailing note so callers know content was skipped.
+        """
         if not self._enabled:
             return ""
         images = self.render_pdf_pages(pdf_path)
@@ -101,6 +107,13 @@ class OCRService:
             text = self.ocr_image(img, prompt)
             if text:
                 parts.append(f"[Page {i + 1}]\n{text}")
+        total = self.pdf_page_count(pdf_path)
+        skipped = total - len(images) if total > len(images) else 0
+        if skipped > 0:
+            parts.append(
+                f"[OCR processed {len(images)} of {total} pages; "
+                f"{skipped} skipped (OCR_MAX_PAGES={self._max_pages})]"
+            )
         return "\n\n".join(parts)
 
     def ocr_images(self, images: list[Any], prompt: str = OCR_PROMPT_TEXT) -> str:  # noqa: ANN401
@@ -118,15 +131,32 @@ class OCRService:
                 parts.append(f"[Image {i + 1}]\n{text}")
         return "\n\n".join(parts)
 
-    def render_pdf_pages(self, pdf_path: str) -> list[Any]:
-        """Convert a PDF to a list of PIL images using pdf2image + Poppler."""
+    def render_pdf_pages(self, pdf_path: str, max_pages: int | None = None) -> list[Any]:
+        """Convert a PDF to a list of PIL images using pdf2image + Poppler.
+
+        Renders at ``OCR_DPI`` and at most ``max_pages`` pages (default
+        ``OCR_MAX_PAGES``) so a large scanned PDF cannot exhaust memory by
+        rasterizing every page at once.
+        """
         from pdf2image import convert_from_path
 
-        kwargs: dict[str, Any] = {}
+        limit = self._max_pages if max_pages is None else max(1, max_pages)
+        kwargs: dict[str, Any] = {"dpi": self._dpi}
         if self._poppler_path:
             kwargs["poppler_path"] = self._poppler_path
-        images = convert_from_path(pdf_path, **kwargs)
+        images = convert_from_path(pdf_path, first_page=1, last_page=limit, **kwargs)
         return [self.resize_if_needed(img) for img in images]
+
+    @staticmethod
+    def pdf_page_count(pdf_path: str) -> int:
+        """Return the number of pages in a PDF (0 when unreadable)."""
+        try:
+            from pypdf import PdfReader
+
+            return len(PdfReader(pdf_path).pages)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not read page count for %s", pdf_path)
+            return 0
 
     def resize_if_needed(self, image: Any) -> Any:  # noqa: ANN401
         """Resize an image so its largest dimension <= OCR_MAX_IMAGE_DIMENSION."""
@@ -165,9 +195,13 @@ class OCRService:
 
     def _mock_ocr(self, image: Any, prompt: str) -> str:  # noqa: ANN401
         """Produce deterministic canned text per prompt type."""
-        # Hash the image's string repr + prompt for determinism.
-        key = repr(image) + prompt
-        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+        # Hash stable image bytes (not repr(), which embeds a memory address
+        # for PIL Images and would differ on every call).
+        try:
+            image_bytes = bytes(image.tobytes())
+        except Exception:  # noqa: BLE001
+            image_bytes = repr(image).encode("utf-8")
+        digest = hashlib.sha256(image_bytes + prompt.encode("utf-8")).hexdigest()[:8]
         if prompt == OCR_PROMPT_TEXT:
             return (
                 f"[mock OCR text recognition page {digest}] "

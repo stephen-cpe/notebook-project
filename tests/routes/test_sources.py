@@ -89,6 +89,89 @@ class TestUploadSource:
         )
         assert res.status_code == 404
 
+    def test_ingestion_crash_marks_failed_not_queued(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: an ingestion exception must not strand the row in queued."""
+        import src.services.ingestion as ingestion_mod
+
+        class _CrashingService:
+            def ingest_file(self, *args: object, **kwargs: object) -> object:
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(ingestion_mod, "get_ingestion_service", lambda: _CrashingService())
+        _login(client, app, "srcuser6")
+        nb_id = _create_notebook(client, app, "Crash NB")
+
+        res = client.post(
+            f"/notebooks/{nb_id}/sources",
+            data={"file": (io.BytesIO(b"hello world, crash test"), "crash.txt")},
+            content_type="multipart/form-data",
+        )
+        assert res.status_code == 500
+        with app.app_context():
+            sources = db.session.query(Source).filter_by(notebook_id=nb_id).all()
+            assert len(sources) == 1
+            assert sources[0].status == "failed"
+
+    def test_upload_triggers_summary_job(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: successful uploads must launch automatic summary regen."""
+        import src.services.jobs as jobs_mod
+
+        launched: list[int] = []
+        monkeypatch.setattr(
+            jobs_mod, "launch_summary_job", lambda notebook_id, app: launched.append(notebook_id)
+        )
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        _login(client, app, "srcuser7")
+        nb_id = _create_notebook(client, app, "Summary Trigger NB")
+        launched.clear()
+
+        with open(FIXTURES / "sample.txt", "rb") as f:
+            res = client.post(
+                f"/notebooks/{nb_id}/sources",
+                data={"file": (f, "sample.txt")},
+                content_type="multipart/form-data",
+            )
+        assert res.status_code in (200, 201)
+        assert launched == [nb_id]
+
+    def test_delete_triggers_summary_job(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: source deletion must launch automatic summary regen."""
+        import src.services.jobs as jobs_mod
+
+        launched: list[int] = []
+        monkeypatch.setattr(
+            jobs_mod, "launch_summary_job", lambda notebook_id, app: launched.append(notebook_id)
+        )
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        _login(client, app, "srcuser8")
+        nb_id = _create_notebook(client, app, "Summary Delete NB")
+
+        with open(FIXTURES / "sample.txt", "rb") as f:
+            res = client.post(
+                f"/notebooks/{nb_id}/sources",
+                data={"file": (f, "sample.txt")},
+                content_type="multipart/form-data",
+            )
+        assert res.status_code in (200, 201)
+        with app.app_context():
+            source = db.session.query(Source).filter_by(notebook_id=nb_id).one()
+            source_id = source.id
+        launched.clear()
+
+        res = client.delete(f"/notebooks/{nb_id}/sources/{source_id}")
+        assert res.status_code == 200
+        assert launched == [nb_id]
+
 
 class TestListSources:
     def test_lists_sources(

@@ -31,13 +31,19 @@ def create_message(
 
 
 def list_by_notebook(notebook_id: int, limit: int = 100) -> Sequence[ChatMessage]:
-    """Return chat history for a notebook, oldest first."""
-    return db.session.scalars(
+    """Return chat history for a notebook, oldest first.
+
+    Returns the *most recent* ``limit`` messages (newest window), ordered
+    oldest-first for display. Ordered by ``(created_at, id)`` so bulk inserts
+    sharing a timestamp stay deterministic.
+    """
+    newest_first = db.session.scalars(
         select(ChatMessage)
         .where(ChatMessage.notebook_id == notebook_id)
-        .order_by(ChatMessage.created_at)
+        .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
         .limit(limit)
     ).all()
+    return list(reversed(newest_first))
 
 
 def delete_by_notebook(notebook_id: int) -> int:

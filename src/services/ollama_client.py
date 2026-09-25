@@ -37,13 +37,32 @@ if TYPE_CHECKING:
 # Format: <|channel|thought\n [reasoning] <channel|> [final answer]
 _THINK_BLOCK_RE = re.compile(r"<\|channel\|thought\s*\n?.*?<\|?channel\|>", re.DOTALL)
 
+# Opening marker of a thinking block (a closing marker always terminates one).
+_THINK_OPEN = "<|channel|thought"
+
 
 def extract_final_answer(raw: str) -> str:
-    """Strip Gemma 4 thinking blocks, returning only the final answer text."""
+    """Strip Gemma 4 thinking blocks, returning only the final answer text.
+
+    A thought-only response (nothing survives stripping) yields ``""`` rather
+    than leaking the raw reasoning as the answer.
+    """
     if not raw:
         return ""
-    cleaned = _THINK_BLOCK_RE.sub("", raw).strip()
-    return cleaned if cleaned else raw.strip()
+    return _THINK_BLOCK_RE.sub("", raw).strip()
+
+
+def _prefix_overlap(haystack: str, needle: str) -> int:
+    """Return the longest k (0 <= k < len(needle)) with haystack ending in needle[:k].
+
+    Used to hold back a possible split thinking-marker tail so a marker
+    straddling two stream tokens is never emitted partially.
+    """
+    max_k = min(len(haystack), len(needle) - 1)
+    for k in range(max_k, 0, -1):
+        if haystack.endswith(needle[:k]):
+            return k
+    return 0
 
 
 def build_prompt(
@@ -135,11 +154,20 @@ class OllamaClient:
         raise AIModelUnavailableError(f"Chat failed after retry: {last_exc}")
 
     def _stream_with_retry(self, messages: list[dict[str, str]]) -> Generator[str]:
-        """Call ``_real_stream`` with one retry on connection failure."""
+        """Call ``_real_stream`` with one retry on connection failure.
+
+        Retries only if nothing was emitted yet: retrying after tokens were
+        already delivered would duplicate the partial answer on the client and
+        in the persisted message. A mid-stream failure raises instead so the
+        caller can surface an explicit error frame.
+        """
         last_exc: Exception | None = None
         for attempt in range(2):
+            emitted_any = False
             try:
-                yield from self._real_stream(messages)
+                for token in self._real_stream(messages):
+                    emitted_any = True
+                    yield token
                 return
             except (ConnectionError, TimeoutError, requests.ConnectionError) as exc:
                 last_exc = exc
@@ -147,6 +175,8 @@ class OllamaClient:
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 logger.warning("Stream attempt %d failed: %s", attempt + 1, exc)
+            if emitted_any:
+                break
         raise AIModelUnavailableError(f"Stream failed after retry: {last_exc}")
 
     # ------------------------------------------------------------------
@@ -255,6 +285,12 @@ class OllamaClient:
 
         token_count = 0
         first_token_at: float | None = None
+        # Incremental thinking-block filter: thinking markers can straddle
+        # token boundaries, so unresolved text accumulates in ``buf``.
+        # Complete blocks are stripped; an unclosed block (or a possible
+        # split-marker tail) is held until it closes or the stream ends.
+        # Streams without markers pass through with no added latency.
+        buf = ""
         for line in resp.iter_lines(decode_unicode=True):
             if not line:
                 continue
@@ -263,7 +299,15 @@ class OllamaClient:
 
                 chunk = json.loads(line)
                 token = chunk.get("message", {}).get("content", "")
-                if token:
+                if not token:
+                    continue
+                buf += token
+                buf = _THINK_BLOCK_RE.sub("", buf)
+                if _THINK_OPEN in buf:
+                    continue  # unclosed thinking block: hold everything
+                overlap = _prefix_overlap(buf, _THINK_OPEN)
+                emit, buf = buf[: len(buf) - overlap], buf[len(buf) - overlap :]
+                if emit:
                     if first_token_at is None:
                         first_token_at = time.time()
                         logger.info(
@@ -271,9 +315,20 @@ class OllamaClient:
                             first_token_at - t0,
                         )
                     token_count += 1
-                    yield token
+                    yield emit
             except (ValueError, KeyError):
                 continue
+
+        # Flush any remainder; drop an unclosed thinking tail rather than
+        # leaking partial reasoning.
+        tail = _THINK_BLOCK_RE.sub("", buf)
+        if _THINK_OPEN in tail:
+            tail = tail.split(_THINK_OPEN, 1)[0]
+        if tail:
+            if first_token_at is None:
+                first_token_at = time.time()
+            token_count += 1
+            yield tail
 
         elapsed = time.time() - t0
         logger.info(

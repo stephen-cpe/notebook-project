@@ -2,7 +2,7 @@
 
 Covers:
 - Backend selection: CI -> EphemeralClient, CHROMA_DB=local -> PersistentClient.
-- Collection naming: content-keyed `doc_<hash[:59]>`.
+- Collection naming: content-keyed + embedding-versioned `doc_<hash[:50]>_<fp>`.
 - store_chunks with metadata (source_hash, filename, page, chunk_index).
 - retrieve (basic similarity search) returns joined text.
 - retrieve_with_scores returns score = 1 - distance.
@@ -18,6 +18,7 @@ import pytest
 
 from src.services.vector_store import (
     VectorStore,
+    embedding_fingerprint,
     get_collection_name,
     get_vector_store,
     reset_vector_store,
@@ -41,18 +42,31 @@ def _reset_chroma() -> None:
 class TestCollectionNaming:
     def test_naming_format(self) -> None:
         h = "a" * 64
-        name = get_collection_name(h)
+        name = get_collection_name(h, "12345678")
         assert name.startswith("doc_")
-        assert len(name) == 4 + 59  # "doc_" + 59 chars
+        assert len(name) == 63  # Chroma's collection-name cap
+        assert name.endswith("_12345678")
 
     def test_different_hashes_different_collections(self) -> None:
         h1 = "a" * 64
         h2 = "b" * 64
-        assert get_collection_name(h1) != get_collection_name(h2)
+        assert get_collection_name(h1, "12345678") != get_collection_name(h2, "12345678")
+
+    def test_fingerprint_versions_collections(self) -> None:
+        """Same content + different backend must not share a collection."""
+        h = "a" * 64
+        assert get_collection_name(h, "aaaaaaaa") != get_collection_name(h, "bbbbbbbb")
+
+    def test_fingerprint_differs_by_model(self) -> None:
+        fp1 = embedding_fingerprint("local", "model-a", 1024)
+        fp2 = embedding_fingerprint("local", "model-b", 1024)
+        fp3 = embedding_fingerprint("local", "model-a", 1024)
+        assert fp1 != fp2
+        assert fp1 == fp3
 
     def test_short_hash_padded(self) -> None:
         h = "abc123"
-        name = get_collection_name(h)
+        name = get_collection_name(h, "12345678")
         assert name.startswith("doc_")
         # Should still produce a valid collection name.
         assert len(name) >= 5
@@ -377,8 +391,17 @@ class TestCollectionExistence:
             h, ["text"], [{"source_hash": h, "filename": "f", "page": 1, "chunk_index": 0}]
         )
         assert vs.collection_exists(h) is True
-        vs.delete_collection(h)
+        assert vs.delete_collection(h) is True
         assert vs.collection_exists(h) is False
+
+    def test_delete_missing_collection_reports_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Deleting a missing collection is a no-op success (nothing remains)."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        vs = VectorStore()
+        assert vs.delete_collection("z" * 64) is True
 
 
 class TestCorruptionRecovery:
@@ -395,7 +418,7 @@ class TestCorruptionRecovery:
         vs.delete_collection(h)
         assert vs.collection_exists(h) is False
         # Rebuild from cached text (chunked internally).
-        vs.rebuild_collection(h, "rebuilt text content here", filename="rebuilt.pdf", page_count=1)
+        vs.rebuild_collection(h, "rebuilt text content here", filename="rebuilt.pdf")
         assert vs.collection_exists(h) is True
         results = vs.retrieve_with_scores(h, "rebuilt", top_k=1)
         assert len(results) >= 1

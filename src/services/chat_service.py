@@ -84,9 +84,12 @@ class ChatService:
 
         # 3. RAG retrieval.
         t0 = time.time()
-        content_hashes = self._get_source_hashes(notebook.id)
+        aliases = self._get_source_aliases(notebook.id)
+        content_hashes = list(aliases.keys())
         logger.info("  [3/5] Retrieving from %d source collections...", len(content_hashes))
-        results = self._retriever.retrieve_with_sources(content_hashes, question, top_k=5)
+        results = self._retriever.retrieve_with_sources(
+            content_hashes, question, top_k=5, filenames=aliases
+        )
         context = build_context_string(results)
         sources = format_sources(results)
         logger.info(
@@ -174,9 +177,12 @@ class ChatService:
 
         # 2. RAG retrieval.
         t0 = time.time()
-        content_hashes = self._get_source_hashes(notebook.id)
+        aliases = self._get_source_aliases(notebook.id)
+        content_hashes = list(aliases.keys())
         logger.info("  [2/4] Retrieving from %d source collections...", len(content_hashes))
-        results = self._retriever.retrieve_with_sources(content_hashes, question, top_k=5)
+        results = self._retriever.retrieve_with_sources(
+            content_hashes, question, top_k=5, filenames=aliases
+        )
         context = build_context_string(results)
         sources = format_sources(results)
         logger.info(
@@ -256,6 +262,15 @@ class ChatService:
 
     def _get_source_hashes(self, notebook_id: int) -> list[str]:
         """Return content hashes for all ready sources in a notebook."""
+        return list(self._get_source_aliases(notebook_id).keys())
+
+    def _get_source_aliases(self, notebook_id: int) -> dict[str, str]:
+        """Map content hash -> this notebook's display filename.
+
+        Citations resolve through this map so shared (deduped) vectors never
+        surface another user's original filename, and renames take effect
+        immediately without re-embedding.
+        """
         sources = (
             db.session.query(Source)
             .filter(
@@ -264,7 +279,7 @@ class ChatService:
             )
             .all()
         )
-        return [s.content_hash for s in sources]
+        return {s.content_hash: s.filename for s in sources}
 
     def _get_source_texts(self, notebook_id: int) -> list[str]:
         """Return cached extracted texts for scope checking."""

@@ -160,6 +160,35 @@ class TestVideoService:
         assert result.status == "failed"
         assert "ffmpeg is not installed" in (result.error or "")
 
+    def test_all_narrations_failed_returns_failed(
+        self, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Total TTS failure must fail loudly, never a silent 'ready' video."""
+        monkeypatch.setenv("AI_MOCK", "false")
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        nb = self._make_notebook(app)
+        slides = [
+            {"type": "title", "heading": "Test", "bullets": [], "narration": "Welcome"},
+            {"type": "content", "heading": "More", "bullets": ["x"], "narration": "Content"},
+        ]
+
+        with (
+            patch("src.services.video_service._ffmpeg_available", return_value=True),
+            patch.object(VideoService, "_synthesize", return_value=False),
+            app.app_context(),
+        ):
+            nb = db.session.merge(nb)
+            svc = VideoService()
+            result = svc.generate_video(nb, slides, "Ava")
+
+        assert result.status == "failed"
+        assert result.video_path is None
+        assert "narrations failed" in (result.error or "")
+        with app.app_context():
+            nb = db.session.merge(nb)
+            assert nb.video_status == "failed"
+            assert nb.video_error is not None
+
     def test_render_slide_creates_image(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AI_MOCK", "true")
         nb = self._make_notebook(app)
@@ -241,9 +270,9 @@ class TestVideoService:
                     mock_run.return_value = MagicMock(stdout="")
                     svc._combine_to_mp4(slide_files, audio_files, output_path)
 
-                # ffprobe duration lookups (2) + one ffmpeg invocation.
+                # ffprobe duration lookups (2) + pad-silence ffmpeg + one combine ffmpeg.
                 ffmpeg_calls = [c for c in mock_run.call_args_list if "ffmpeg" in c.args[0]]
-                assert len(ffmpeg_calls) == 1
+                assert len(ffmpeg_calls) == 2
                 assert "ffprobe" in mock_run.call_args_list[0].args[0]
                 # Concat list files were written and cleaned up.
                 assert not Path(output_path).with_suffix(".txt").exists()

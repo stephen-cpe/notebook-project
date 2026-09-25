@@ -47,14 +47,17 @@ def update_status(
     page_count: int | None = None,
     error_message: str | None = None,
 ) -> Source:
-    """Update the ingestion status + metadata of a source."""
+    """Update the ingestion status + metadata of a source.
+
+    ``page_count`` and ``error_message`` are always assigned (passing ``None``
+    clears a stale value from a previous attempt) so a healthy re-ingest never
+    shows a leftover failure string.
+    """
     source.status = status
     if char_count is not None:
         source.char_count = char_count
-    if page_count is not None:
-        source.page_count = page_count
-    if error_message is not None:
-        source.error_message = error_message
+    source.page_count = page_count
+    source.error_message = error_message
     db.session.commit()
     return source
 
@@ -105,5 +108,10 @@ def list_hashes_by_notebook(notebook_id: int) -> list[str]:
     Used by notebook deletion to know which hashes may need cleanup after the
     notebook's sources are cascade-deleted.
     """
-    rows = db.session.query(Source.content_hash).filter(Source.notebook_id == notebook_id).all()
+    rows = (
+        db.session.query(Source.content_hash)
+        .filter(Source.notebook_id == notebook_id)
+        .distinct()
+        .all()
+    )
     return [r[0] for r in rows]

@@ -1,9 +1,10 @@
 """Unit tests for src.services.context_builder.
 
 Verifies the shared source-selection helper used by the summary, audio, and
-video overview generators: deterministic upload-order selection, character
-budget enforcement, oversized-first-source inclusion, status filtering, and
-graceful handling of missing ContentRegistry text.
+video overview generators: deterministic upload-order selection, hard
+character budget enforcement (oversized sources truncated, never blown
+past), status filtering, and graceful handling of missing
+ContentRegistry text.
 """
 
 from __future__ import annotations
@@ -92,21 +93,27 @@ class TestSelectSourcesWithinBudget:
         _add_source(app, nb_id, "d.txt", "d" * 64, "dddd")  # 4
         with app.app_context():
             sel = select_sources_within_budget(nb_id, max_chars=10)
-        # 4+4=8 fits, 4+4+4=12 > 10 -> stop at 2 sources.
-        assert sel.texts == ["aaaa", "bbbb"]
-        assert sel.total_chars == 8
-        assert sel.used_count == 2
+        # 4+4=8 fits; the third is truncated to the remaining 2 chars so the
+        # hard budget is never exceeded.
+        assert sel.texts[0] == "aaaa"
+        assert sel.texts[1] == "bbbb"
+        assert sel.texts[2].startswith("cc")
+        assert "[truncated" in sel.texts[2]
+        assert sel.total_chars == 10
+        assert sel.used_count == 3
         assert sel.total_count == 4
 
-    def test_first_source_always_included_even_if_oversized(self, app: object) -> None:
+    def test_oversized_first_source_truncated_to_budget(self, app: object) -> None:
         _, nb_id = _make_user_and_notebook(app, "cb5")
         big = "x" * 1000
         _add_source(app, nb_id, "big.txt", "z" * 64, big)
         _add_source(app, nb_id, "small.txt", "y" * 64, "yy")
         with app.app_context():
             sel = select_sources_within_budget(nb_id, max_chars=100)
-        assert sel.texts == [big]
-        assert sel.total_chars == 1000
+        assert len(sel.texts) == 1
+        assert sel.texts[0].startswith("x" * 100)
+        assert "[truncated" in sel.texts[0]
+        assert sel.total_chars == 100
         assert sel.used_count == 1
         assert sel.total_count == 2
 

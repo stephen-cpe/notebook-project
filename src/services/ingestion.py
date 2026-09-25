@@ -18,20 +18,22 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.services.chunker import chunk_text
+from src.services.chunker import chunk_units
 from src.services.document_parser import (
     detect_content_type,
     extract_docx_images,
     extract_pptx_images,
     extract_text,
+    extract_units,
     parse_pdf_with_pages,
 )
 from src.services.ocr_service import OCR_PROMPT_TEXT, get_ocr_service
-from src.services.vector_store import get_collection_name, get_vector_store
+from src.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,41 @@ def compute_hash(file_path: str, chunk_size: int = 65536) -> str:
                 break
             h.update(block)
     return h.hexdigest()
+
+
+_OCR_PAGE_MARKER_RE = re.compile(r"\[Page (\d+)\]\n?")
+
+
+def _split_ocr_pages(text: str) -> list[tuple[str, int | None]]:
+    """Split OCR output on its ``[Page N]`` markers into ``(text, page)`` units.
+
+    Returns ``[]`` when the text carries no markers (caller falls back to a
+    single pageless unit). A trailing skip-note without a marker stays with
+    the last page.
+    """
+    if "[Page " not in text:
+        return []
+    parts = _OCR_PAGE_MARKER_RE.split(text)
+    # parts: [pre, n1, t1, n2, t2, ...]
+    units: list[tuple[str, int | None]] = []
+    pre = parts[0].strip()
+    rest = parts[1:]
+    first_page: int | None = None
+    for i in range(0, len(rest) - 1, 2):
+        try:
+            page = int(rest[i])
+        except ValueError:
+            continue
+        if first_page is None:
+            first_page = page
+        body = rest[i + 1].strip() if i + 1 < len(rest) else ""
+        if body:
+            units.append((body, page))
+    if pre and first_page is not None:
+        units.insert(0, (pre, first_page))
+    elif pre:
+        units.insert(0, (pre, None))
+    return units
 
 
 class IngestionService:
@@ -100,23 +137,18 @@ class IngestionService:
 
         from src.repositories import content_registry_repo
 
-        # 2. Dedup: if a ChromaDB collection already exists, return early.
+        fingerprint = self._vector_store.embedding_fingerprint
+
+        # 2. Dedup: if a collection for the current embedding backend already
+        # exists and the registry holds matching cached text, skip re-embedding.
         if self._vector_store.collection_exists(content_hash):
             logger.info("Skipping re-embedding for existing hash %s", content_hash[:12])
             entry = content_registry_repo.get_by_hash(content_hash)
-            if entry is None or not entry.extracted_text:
-                # Collection exists but registry is missing/empty.
-                # We cannot recover text here without re-parsing; mark the
-                # source for re-ingestion by deleting the partial collection
-                # and falling through to the normal extract path.
-                logger.warning(
-                    "Collection exists for hash %s but ContentRegistry is missing; "
-                    "rebuilding from scratch.",
-                    content_hash[:12],
-                )
-                self._vector_store.delete_collection(content_hash)
-                # Fall through to the full extraction path below.
-            else:
+            if (
+                entry is not None
+                and entry.extracted_text
+                and entry.embedding_fingerprint == fingerprint
+            ):
                 cached_text = entry.extracted_text
                 return IngestionResult(
                     content_hash=content_hash,
@@ -126,13 +158,27 @@ class IngestionService:
                     page_count=None,
                     ocr_used=False,
                 )
+            # Collection exists but the registry is missing/empty, or was
+            # embedded with a different backend version. Delete the partial or
+            # stale collection and fall through to the full extraction path,
+            # which re-embeds and refreshes the registry fingerprint.
+            logger.warning(
+                "Collection exists for hash %s but ContentRegistry is missing, "
+                "empty, or stale (backend changed); rebuilding from scratch.",
+                content_hash[:12],
+            )
+            self._vector_store.delete_collection(content_hash)
+            # Fall through to the full extraction path below.
 
-        # 2b. If collection is missing but ContentRegistry has cached text,
-        #     rebuild from cache instead of re-extracting.
+        # 2b. If the versioned collection is missing but ContentRegistry has
+        # cached text embedded with the current backend, rebuild from cache
+        # instead of re-extracting. Stale-fingerprint caches fall through to
+        # full extraction so vectors are never mixed across backend versions.
         entry = content_registry_repo.get_by_hash(content_hash)
         if (
             entry is not None
             and entry.extracted_text
+            and entry.embedding_fingerprint == fingerprint
             and not self._vector_store.collection_exists(content_hash)
         ):
             logger.info(
@@ -168,9 +214,11 @@ class IngestionService:
                 error_message="No text could be extracted from the file.",
             )
 
-        # 4. Chunk + embed + store.
-        chunks = chunk_text(text)
-        if not chunks:
+        # 4. Chunk per location-aware unit + embed + store. Page numbers
+        # come from real document locations (PDF pages / PPTX slides) or
+        # None for pageless content — never the chunk index.
+        chunked = chunk_units(self._build_units(file_path, content_type, text, ocr_used))
+        if not chunked:
             return IngestionResult(
                 content_hash=content_hash,
                 status="partial",
@@ -180,16 +228,20 @@ class IngestionService:
                 ocr_used=ocr_used,
                 error_message="Chunking produced no chunks.",
             )
+        chunks = [chunk for chunk, _ in chunked]
 
-        metadatas = [
-            {
+        metadatas = []
+        for i, (_, page) in enumerate(chunked):
+            # ChromaDB metadata rejects None values: pageless content omits
+            # the key entirely (readers treat a missing page as None).
+            metadata: dict[str, object] = {
                 "source_hash": content_hash,
                 "filename": filename,
-                "page": (i + 1) if page_count else (i + 1),
                 "chunk_index": i,
             }
-            for i in range(len(chunks))
-        ]
+            if page is not None:
+                metadata["page"] = page
+            metadatas.append(metadata)
 
         # Store chunks + register in one unit; if the registry write fails after
         # the collection is created, delete the partial collection so a later
@@ -198,9 +250,10 @@ class IngestionService:
             self._vector_store.store_chunks(content_hash, chunks, metadatas)
             content_registry_repo.get_or_create(
                 content_hash=content_hash,
-                chroma_collection=get_collection_name(content_hash),
+                chroma_collection=self._vector_store.collection_name(content_hash),
                 extracted_text=text,
                 char_count=len(text),
+                embedding_fingerprint=fingerprint,
             )
         except Exception:
             logger.exception(
@@ -268,6 +321,26 @@ class IngestionService:
             ocr_used = True
 
         return text, page_count, ocr_used
+
+    def _build_units(
+        self, file_path: str, content_type: str, text: str, ocr_used: bool
+    ) -> list[tuple[str, int | None]]:
+        """Build ``(text, page)`` units for chunking with true locations.
+
+        PDF pages and PPTX slides keep their real 1-based numbers; other
+        content yields ``page=None``. When PDF OCR replaced near-empty
+        native text, units are re-split from the OCR output's ``[Page N]``
+        markers (see ``ocr_service.ocr_pdf``).
+        """
+        if content_type == "pdf" and ocr_used:
+            return _split_ocr_pages(text) or ([(text, None)] if text.strip() else [])
+        try:
+            units, _ = extract_units(file_path, content_type)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Unit extraction failed for %s: %s", file_path, exc)
+            return [(text, None)] if text.strip() else []
+        nonempty = [(unit.text, unit.page) for unit in units if unit.text.strip()]
+        return nonempty or ([(text, None)] if text.strip() else [])
 
     def _run_ocr_fallback(self, file_path: str, content_type: str) -> str | None:
         """Run the type-appropriate OCR fallback.

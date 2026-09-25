@@ -17,7 +17,7 @@ from werkzeug.wrappers import Response as WerkzeugResponse
 
 from src.extensions import db
 from src.routes._helpers import require_owner
-from src.services.jobs import launch_video_job
+from src.services.jobs import TRANSIENT_MEDIA_STATUSES, launch_video_job
 from src.services.video_service import VIDEO_STATUS_QUEUED
 
 video_bp = Blueprint("video", __name__)
@@ -29,16 +29,27 @@ def request_video(notebook_id: int) -> tuple[Response, int]:
     """Request Video Overview generation (async background job)."""
     notebook = require_owner(notebook_id)
 
+    if notebook.video_status in TRANSIENT_MEDIA_STATUSES:
+        return jsonify(error="Video generation already in progress."), 409
+
     data = request.get_json(silent=True) or {}
     topic = (data.get("topic") or "").strip()
     speaker = getattr(current_user, "video_speaker", "Ava")
 
     notebook.video_status = VIDEO_STATUS_QUEUED
+    notebook.video_error = None
+    notebook.video_generation += 1
     db.session.commit()
 
     from flask import current_app as flask_app
 
-    launch_video_job(notebook_id, flask_app._get_current_object(), topic=topic, speaker=speaker)  # type: ignore[attr-defined]
+    launch_video_job(
+        notebook_id,
+        flask_app._get_current_object(),  # type: ignore[attr-defined]
+        topic=topic,
+        speaker=speaker,
+        generation=notebook.video_generation,
+    )
 
     return jsonify(status="queued", message="Video generation started."), 202
 
@@ -48,10 +59,12 @@ def request_video(notebook_id: int) -> tuple[Response, int]:
 def video_status(notebook_id: int) -> tuple[Response, int]:
     """Return the current video generation status."""
     notebook = require_owner(notebook_id)
+    has_video = notebook.video_path is not None and Path(notebook.video_path).is_file()
     return (
         jsonify(
             status=notebook.video_status,
-            has_video=notebook.video_path is not None,
+            has_video=has_video,
+            error=notebook.video_error,
         ),
         200,
     )
@@ -75,7 +88,11 @@ def video_file(notebook_id: int) -> WerkzeugResponse:
 @video_bp.delete("/notebooks/<int:notebook_id>/video")
 @login_required
 def delete_video(notebook_id: int) -> tuple[Response, int]:
-    """Delete the generated video file and reset status."""
+    """Delete the generated video file and reset status.
+
+    Bumps the video generation so a still-running job's late result is
+    discarded instead of resurrecting the deleted file.
+    """
     notebook = require_owner(notebook_id)
     if notebook.video_path:
         video_path = Path(notebook.video_path)
@@ -84,5 +101,7 @@ def delete_video(notebook_id: int) -> tuple[Response, int]:
         video_path.unlink(missing_ok=True)
     notebook.video_path = None
     notebook.video_status = "none"
+    notebook.video_error = None
+    notebook.video_generation += 1
     db.session.commit()
     return jsonify(ok=True), 200

@@ -61,13 +61,19 @@ class AudioService:
         dialogue: list[dict[str, str]],
         speaker_a: str = "Ava",
         speaker_b: str = "Andrew",
+        job_id: str | None = None,
+        generation: int | None = None,
     ) -> AudioResult:
         """Synthesize + concatenate the dialogue into a single MP3.
 
         Returns ``AudioResult`` with status ready/failed and the file path.
+        Each job synthesizes into its own temp directory so concurrent jobs
+        never overwrite each other's files.
         """
+        import uuid
+
         if not dialogue:
-            self._set_status(notebook, AUDIO_STATUS_FAILED)
+            self._set_failed(notebook, "No dialogue to synthesize.")
             return AudioResult(
                 status=AUDIO_STATUS_FAILED, audio_path=None, error="No dialogue to synthesize."
             )
@@ -83,44 +89,61 @@ class AudioService:
         sig = hashlib.sha256("|".join(u["text"] for u in dialogue).encode()).hexdigest()[:12]
         output_path = str(audio_dir / f"{sig}.mp3")
 
-        # Synthesize each utterance.
-        temp_dir = audio_dir / "tmp"
-        temp_dir.mkdir(exist_ok=True)
-        temp_files: list[str] = []
-        success_count = 0
+        # Job-isolated temp directory (never the shared fixed "tmp/" name).
+        jid = job_id or uuid.uuid4().hex[:8]
+        temp_dir = audio_dir / f"tmp_{jid}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            temp_files: list[str] = []
+            success_count = 0
 
-        for i, utterance in enumerate(dialogue):
-            host = utterance["host"]
-            text = utterance["text"]
-            voice = voice_a if host == "A" else voice_b
-            temp_path = str(temp_dir / f"utterance_{i:04d}.mp3")
+            for i, utterance in enumerate(dialogue):
+                host = utterance["host"]
+                text = utterance["text"]
+                voice = voice_a if host == "A" else voice_b
+                temp_path = str(temp_dir / f"utterance_{i:04d}.mp3")
 
-            ok = synthesize_utterance(text, voice, temp_path, mock=self._mock)
-            if ok:
-                temp_files.append(temp_path)
-                success_count += 1
-            else:
-                logger.warning("Utterance %d failed, skipping", i)
+                ok = synthesize_utterance(text, voice, temp_path, mock=self._mock)
+                if ok:
+                    temp_files.append(temp_path)
+                    success_count += 1
+                else:
+                    logger.warning("Utterance %d failed, skipping", i)
 
-        if success_count == 0:
-            self._set_status(notebook, AUDIO_STATUS_FAILED)
+            if success_count == 0:
+                self._set_failed(notebook, "All utterances failed to synthesize.")
+                return AudioResult(
+                    status=AUDIO_STATUS_FAILED,
+                    audio_path=None,
+                    error="All utterances failed to synthesize.",
+                )
+
+            # Concatenate into single MP3.
+            self._concatenate_audio(temp_files, output_path)
+        finally:
+            import shutil
+
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+        if self._is_superseded(notebook, generation):
+            Path(output_path).unlink(missing_ok=True)
+            logger.warning(
+                "Audio result for notebook %d discarded (superseded generation)", notebook.id
+            )
             return AudioResult(
                 status=AUDIO_STATUS_FAILED,
                 audio_path=None,
-                error="All utterances failed to synthesize.",
+                error="Superseded by a newer job.",
             )
 
-        # Concatenate into single MP3.
-        self._concatenate_audio(temp_files, output_path)
-
-        # Clean up temp files.
-        for f in temp_files:
-            Path(f).unlink(missing_ok=True)
-
-        # Persist to notebook.
+        # Persist to notebook, removing the superseded artifact if replaced.
+        previous = notebook.audio_path
         notebook.audio_path = output_path
         notebook.audio_status = AUDIO_STATUS_READY
+        notebook.audio_error = None
         db.session.commit()
+        if previous and previous != output_path:
+            Path(previous).unlink(missing_ok=True)
 
         logger.info(
             "Audio generated for notebook %d: %d/%d utterances, file=%s",
@@ -165,6 +188,28 @@ class AudioService:
         notebook.audio_status = status
         db.session.commit()
 
+    def _set_failed(self, notebook: Notebook, error: str) -> None:
+        """Mark the notebook's audio job failed with a user-visible reason."""
+        notebook.audio_status = AUDIO_STATUS_FAILED
+        notebook.audio_error = error
+        db.session.commit()
+
+    @staticmethod
+    def _is_superseded(notebook: Notebook, generation: int | None) -> bool:
+        """True when this job's result must be discarded.
+
+        Refreshes the notebook row so a relaunch or delete that committed
+        after this job started is observed. A deleted/unreadable row also
+        counts as superseded.
+        """
+        if generation is None:
+            return False
+        try:
+            db.session.refresh(notebook)
+        except Exception:  # noqa: BLE001
+            return True
+        return notebook.audio_generation != generation or notebook.audio_status == "none"
+
 
 # ---------------------------------------------------------------------------
 # End-to-end function (used by background job)
@@ -172,19 +217,34 @@ class AudioService:
 
 
 def generate_audio_for_notebook(
-    notebook_id: int, topic: str = "", speaker_a: str = "Ava", speaker_b: str = "Andrew"
+    notebook_id: int,
+    topic: str = "",
+    speaker_a: str = "Ava",
+    speaker_b: str = "Andrew",
+    job_id: str | None = None,
+    generation: int | None = None,
 ) -> AudioResult | None:
     """Full pipeline: script -> synthesize -> concatenate -> persist.
 
-    Returns ``AudioResult`` or ``None`` on failure.
+    Returns ``AudioResult`` or ``None`` on failure. A job whose generation no
+    longer matches (relaunch/delete raced it) exits without persisting.
     """
     notebook = notebook_repo.get_by_id(notebook_id)
     if notebook is None:
         logger.error("Notebook %d not found for audio generation", notebook_id)
         return None
+    if generation is not None and notebook.audio_generation != generation:
+        logger.info(
+            "Audio job for notebook %d is stale (job %s, current %s); exiting.",
+            notebook_id,
+            generation,
+            notebook.audio_generation,
+        )
+        return None
 
     # Set status to scripting.
     notebook.audio_status = AUDIO_STATUS_SCRIPTING
+    notebook.audio_error = None
     db.session.commit()
     logger.info("Audio generation: scripting dialogue for notebook %d", notebook_id)
 
@@ -193,6 +253,7 @@ def generate_audio_for_notebook(
     if not dialogue:
         logger.error("Audio generation: no dialogue produced for notebook %d", notebook_id)
         notebook.audio_status = AUDIO_STATUS_FAILED
+        notebook.audio_error = "No dialogue could be generated."
         db.session.commit()
         return AudioResult(
             status=AUDIO_STATUS_FAILED,
@@ -208,7 +269,14 @@ def generate_audio_for_notebook(
 
     # Synthesize.
     svc = AudioService()
-    result = svc.generate_audio(notebook, dialogue, speaker_a=speaker_a, speaker_b=speaker_b)
+    result = svc.generate_audio(
+        notebook,
+        dialogue,
+        speaker_a=speaker_a,
+        speaker_b=speaker_b,
+        job_id=job_id,
+        generation=generation,
+    )
     logger.info(
         "Audio generation result: notebook=%d status=%s path=%s",
         notebook_id,

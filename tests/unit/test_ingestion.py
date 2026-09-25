@@ -31,7 +31,7 @@ from src.services.ingestion import (
     reset_ingestion_service,
 )
 from src.services.ocr_service import reset_ocr_service
-from src.services.vector_store import get_collection_name, get_vector_store, reset_vector_store
+from src.services.vector_store import get_vector_store, reset_vector_store
 
 FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 
@@ -112,7 +112,8 @@ class TestIngestFile:
             # ContentRegistry entry created.
             entry = content_registry_repo.get_by_hash(result.content_hash)
             assert entry is not None
-            assert entry.chroma_collection == get_collection_name(result.content_hash)
+            assert entry.chroma_collection == svc._vector_store.collection_name(result.content_hash)
+            assert entry.embedding_fingerprint == svc._vector_store.embedding_fingerprint
             assert entry.char_count == result.char_count
 
     def test_ingest_pdf(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,6 +192,91 @@ class TestIdempotency:
                 db.session.query(ContentRegistry).filter_by(content_hash=r1.content_hash).count()
             )
             assert count == 1
+
+    def test_backend_change_reembeds_and_refreshes_fingerprint(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A model change must not reuse vectors from the old backend version."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        monkeypatch.setenv("EMBEDDING_MODEL", "model-one")
+        svc = IngestionService()
+
+        with app.app_context():
+            r1 = svc.ingest_file(str(FIXTURES / "sample.txt"), filename="sample.txt")
+            old_collection = svc._vector_store.collection_name(r1.content_hash)
+            old_fp = svc._vector_store.embedding_fingerprint
+            assert svc._vector_store.collection_exists(r1.content_hash) is True
+
+        # Switch backend + rebuild service singletons so the new config applies.
+        monkeypatch.setenv("EMBEDDING_MODEL", "model-two")
+        reset_vector_store()
+        reset_ingestion_service()
+        get_vector_store().reset()
+        svc2 = IngestionService()
+        assert svc2._vector_store.embedding_fingerprint != old_fp
+        assert svc2._vector_store.collection_name(r1.content_hash) != old_collection
+
+        with app.app_context():
+            r2 = svc2.ingest_file(str(FIXTURES / "sample.txt"), filename="sample.txt")
+
+        assert r2.status == "ready"
+        with app.app_context():
+            entry = content_registry_repo.get_by_hash(r1.content_hash)
+            assert entry is not None
+            assert entry.embedding_fingerprint == svc2._vector_store.embedding_fingerprint
+            assert entry.chroma_collection == svc2._vector_store.collection_name(r1.content_hash)
+
+
+class TestCitationPages:
+    def test_pdf_chunks_carry_real_pages(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Stored PDF chunk metadata must hold true page numbers, not indices."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        svc = IngestionService()
+
+        with app.app_context():
+            result = svc.ingest_file(str(FIXTURES / "sample.pdf"), filename="sample.pdf")
+            assert result.status == "ready"
+            collection = svc._vector_store._client.get_collection(
+                name=svc._vector_store.collection_name(result.content_hash)
+            )
+            stored = collection.get(include=["metadatas"])
+            metadatas = stored["metadatas"] or []
+            assert len(metadatas) >= 1
+            for md in metadatas:
+                assert md["page"] in (1, 2)
+
+    def test_txt_chunks_omit_page_key(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Pageless content must not carry fabricated page numbers."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        svc = IngestionService()
+
+        with app.app_context():
+            result = svc.ingest_file(str(FIXTURES / "sample.txt"), filename="sample.txt")
+            assert result.status == "ready"
+            collection = svc._vector_store._client.get_collection(
+                name=svc._vector_store.collection_name(result.content_hash)
+            )
+            stored = collection.get(include=["metadatas"])
+            metadatas = stored["metadatas"] or []
+            assert len(metadatas) >= 1
+            for md in metadatas:
+                assert "page" not in md
+
+    def test_split_ocr_pages(self) -> None:
+        """OCR [Page N] markers map back to real page numbers."""
+        from src.services.ingestion import _split_ocr_pages
+
+        text = "[Page 1]\nhello\n\n[Page 2]\nworld"
+        assert _split_ocr_pages(text) == [("hello", 1), ("world", 2)]
+        assert _split_ocr_pages("plain text, no markers") == []
 
 
 # ---------------------------------------------------------------------------

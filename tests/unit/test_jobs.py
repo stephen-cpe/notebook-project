@@ -54,7 +54,13 @@ class TestLaunchAudioJob:
             launch_audio_job(nb_id, app)
             time.sleep(0.2)
 
-            mock_gen.assert_called_once_with(nb_id, topic="", speaker_a="Ava", speaker_b="Andrew")
+            mock_gen.assert_called_once()
+            _, kwargs = mock_gen.call_args
+            assert kwargs["topic"] == ""
+            assert kwargs["speaker_a"] == "Ava"
+            assert kwargs["speaker_b"] == "Andrew"
+            assert kwargs["generation"] is None
+            assert isinstance(kwargs["job_id"], str) and len(kwargs["job_id"]) == 8
 
     def test_handles_audio_generation_error(
         self, app: object, caplog: pytest.LogCaptureFixture
@@ -201,7 +207,12 @@ class TestLaunchVideoJob:
             launch_video_job(nb_id, app, topic="AI", speaker="Ava")
             time.sleep(0.2)
 
-            mock_gen.assert_called_once_with(nb_id, topic="AI", speaker="Ava")
+            mock_gen.assert_called_once()
+            _, kwargs = mock_gen.call_args
+            assert kwargs["topic"] == "AI"
+            assert kwargs["speaker"] == "Ava"
+            assert kwargs["generation"] is None
+            assert isinstance(kwargs["job_id"], str) and len(kwargs["job_id"]) == 8
 
     def test_handles_video_error(self, app: object, caplog: pytest.LogCaptureFixture) -> None:
         import logging
@@ -238,3 +249,98 @@ class TestLaunchVideoJob:
             nb = db.session.get(Notebook, nb_id)
             assert nb is not None
             assert nb.video_status == "failed"
+
+
+class TestStaleGenerations:
+    def _make_notebook(self, app: object, username: str) -> int:
+        with app.app_context():
+            from src.extensions import db
+            from src.models import Notebook, User
+            from src.services.auth_service import hash_password
+
+            u = User(username=username, password_hash=hash_password("pw"))
+            db.session.add(u)
+            db.session.commit()
+            nb = Notebook(user_id=u.id, name="Stale NB")
+            db.session.add(nb)
+            db.session.commit()
+            return nb.id
+
+    def test_crash_with_stale_generation_leaves_state(
+        self, app: object, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A superseded job's crash must not overwrite the current generation."""
+        import logging
+
+        caplog.set_level(logging.INFO)
+        nb_id = self._make_notebook(app, "stale1")
+        with app.app_context():
+            from src.extensions import db
+            from src.models import Notebook
+
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            nb.audio_status = "synthesizing"
+            nb.audio_generation = 2
+            db.session.commit()
+
+        with patch(
+            "src.services.audio_service.generate_audio_for_notebook",
+            side_effect=Exception("old boom"),
+        ):
+            launch_audio_job(nb_id, app, generation=1)
+            time.sleep(0.2)
+
+        with app.app_context():
+            from src.extensions import db
+            from src.models import Notebook
+
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            assert nb.audio_status == "synthesizing"
+            assert nb.audio_generation == 2
+
+    def test_recover_interrupted_media_jobs(self, app: object) -> None:
+        """Restart recovery marks transient jobs failed with an explanation."""
+        from src.services.jobs import recover_interrupted_media_jobs
+
+        nb_id = self._make_notebook(app, "stale2")
+        with app.app_context():
+            from src.extensions import db
+            from src.models import Notebook
+
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            nb.audio_status = "synthesizing"
+            nb.video_status = "queued"
+            db.session.commit()
+
+        with app.app_context():
+            recovered = recover_interrupted_media_jobs(app)
+            assert recovered == 2
+            from src.models import Notebook
+
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            assert nb.audio_status == "failed"
+            assert nb.audio_error is not None
+            assert nb.video_status == "failed"
+            assert nb.video_error is not None
+
+    def test_recover_leaves_terminal_states(self, app: object) -> None:
+        """Ready/failed/none notebooks are untouched by recovery."""
+        from src.services.jobs import recover_interrupted_media_jobs
+
+        nb_id = self._make_notebook(app, "stale3")
+        with app.app_context():
+            from src.extensions import db
+            from src.models import Notebook
+
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            nb.audio_status = "ready"
+            nb.video_status = "failed"
+            db.session.commit()
+
+        with app.app_context():
+            assert recover_interrupted_media_jobs(app) == 0

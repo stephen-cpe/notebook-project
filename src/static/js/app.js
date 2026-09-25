@@ -253,6 +253,35 @@
   });
 
   // -------------------------------------------------------------------------
+  // Chat history: render persisted turns on page init
+  // -------------------------------------------------------------------------
+
+  function loadChatHistory() {
+    if (!NB_ID || !chatMessages) return;
+    fetch("/notebooks/" + NB_ID + "/chat/history", {
+      headers: { "X-CSRFToken": CSRF },
+    })
+      .then(function (response) {
+        if (!response.ok) return null;
+        return response.json();
+      })
+      .then(function (data) {
+        if (!data || !data.messages) return;
+        data.messages.forEach(function (m) {
+          var div = ChatUI.appendMessage(m.role, m.content || "");
+          if (m.role !== "user" && m.sources && m.sources.length) {
+            ChatUI.appendSources(div, m.sources);
+          }
+        });
+      })
+      .catch(function () {
+        // History is best-effort; the summary placeholder remains on failure.
+      });
+  }
+
+  loadChatHistory();
+
+  // -------------------------------------------------------------------------
   // Suggested questions: click to send
   // -------------------------------------------------------------------------
 

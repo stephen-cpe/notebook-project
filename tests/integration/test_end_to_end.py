@@ -206,3 +206,6 @@ class TestEndToEnd:
         data = res.get_json()
         assert data["app"] == "ok"
         assert data["db"] == "ok"
+        # Health responses must not leak internal error details.
+        assert "db_error" not in data
+        assert "chroma_error" not in data

@@ -133,7 +133,14 @@ def create_app(config: Config | None = None) -> Flask:
     # --- Health endpoint ---
     @app.get("/health")
     def health() -> tuple[Any, int]:
-        """Best-effort liveness probe (NFR-51)."""
+        """Cheap liveness probe (NFR-51).
+
+        Deliberately lightweight: no embedding-model initialization and no
+        outbound LLM calls, so monitoring probes can never exhaust memory or
+        generate inference cost. Dependency details stay server-side; the
+        response carries only coarse status plus a 503 when a required
+        dependency is down.
+        """
         status: dict[str, str] = {"app": "ok"}
         http = 200
 
@@ -142,32 +149,32 @@ def create_app(config: Config | None = None) -> Flask:
             db.session.execute(db.text("SELECT 1"))
             status["db"] = "ok"
         except Exception as exc:  # noqa: BLE001
+            app.logger.warning("Health check: database down: %s", exc)
             status["db"] = "down"
-            status["db_error"] = str(exc)
             http = 503
 
-        # ChromaDB check (best-effort).
+        # ChromaDB check (best-effort, no model load: VectorStore creates its
+        # embedding service lazily, so this only builds the client).
         try:
             from src.services.vector_store import get_vector_store
 
             vs = get_vector_store()
             status["chroma"] = "ok" if vs.backend else "degraded"
+            if status["chroma"] != "ok":
+                http = 503
         except Exception as exc:  # noqa: BLE001
+            app.logger.warning("Health check: ChromaDB down: %s", exc)
             status["chroma"] = "down"
-            status["chroma_error"] = str(exc)
+            http = 503
 
-        # Ollama Cloud check (best-effort, short timeout).
-        try:
-            import requests
-
-            r = requests.get(
-                f"{cfg.ollama_cloud_base_url}/api/tags",
-                headers={"Authorization": f"Bearer {cfg.ollama_cloud_api_key}"},
-                timeout=5,
-            )
-            status["ollama_cloud"] = "ok" if r.status_code == 200 else "degraded"
-        except Exception:  # noqa: BLE001
-            status["ollama_cloud"] = "degraded"
+        # Ollama Cloud status (configuration only — no outbound probe, so
+        # health checks never incur latency, cost, or credential exposure).
+        if cfg.ai_mock:
+            status["ollama_cloud"] = "mock"
+        elif cfg.ollama_cloud_base_url:
+            status["ollama_cloud"] = "configured"
+        else:
+            status["ollama_cloud"] = "unconfigured"
 
         # Voice conversation status (observability).
         if cfg.voice_enabled:
@@ -186,6 +193,17 @@ def create_app(config: Config | None = None) -> Flask:
         return jsonify(status), http
 
     app.logger.info("notebook-project app created (chat_model=%s)", cfg.chat_model)
+
+    # --- Recover media jobs interrupted by a previous process restart ---
+    # Daemon threads don't survive restarts; without this, notebooks stuck
+    # in a transient audio/video status would show "processing" forever.
+    try:
+        with app.app_context():
+            from src.services.jobs import recover_interrupted_media_jobs
+
+            recover_interrupted_media_jobs(app)
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("Media job recovery skipped: %s", exc)
 
     # --- Admin seeding command ---
     _register_seed_admin_command(app)

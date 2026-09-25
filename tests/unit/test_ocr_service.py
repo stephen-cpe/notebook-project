@@ -177,6 +177,75 @@ class TestOcrPdf:
         assert svc.ocr_pdf("empty.pdf") == ""
 
 
+class TestRenderLimits:
+    def _fake_pdf2image(self, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+        import sys
+        import types
+
+        fake_pdf2image = types.ModuleType("pdf2image")
+        calls: list[dict[str, Any]] = []
+
+        def _fake_convert_from_path(path: str, **kwargs: Any) -> list[Any]:
+            calls.append({"path": path, "kwargs": kwargs})
+            img = types.SimpleNamespace(size=(10, 10))
+            return [img]
+
+        fake_pdf2image.convert_from_path = _fake_convert_from_path
+        monkeypatch.setitem(sys.modules, "pdf2image", fake_pdf2image)
+        return calls
+
+    def test_render_passes_dpi_and_page_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._fake_pdf2image(monkeypatch)
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        svc.render_pdf_pages("whatever.pdf")
+        assert calls[0]["kwargs"]["dpi"] == 150
+        assert calls[0]["kwargs"]["first_page"] == 1
+        assert calls[0]["kwargs"]["last_page"] == 30
+
+    def test_render_respects_custom_max_pages(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._fake_pdf2image(monkeypatch)
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_MAX_PAGES", "5")
+        monkeypatch.setenv("OCR_DPI", "200")
+        svc = OCRService()
+        svc.render_pdf_pages("whatever.pdf")
+        assert calls[0]["kwargs"]["dpi"] == 200
+        assert calls[0]["kwargs"]["last_page"] == 5
+
+    def test_ocr_pdf_reports_skipped_pages(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        monkeypatch.setattr(svc, "render_pdf_pages", lambda pdf_path: ["img"])
+        monkeypatch.setattr(OCRService, "pdf_page_count", staticmethod(lambda pdf_path: 3))
+        text = svc.ocr_pdf("fake.pdf")
+        assert "2 skipped" in text
+        assert "3 pages" in text
+
+    def test_config_reads_ocr_limits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from src.config import Config
+
+        monkeypatch.setenv("OCR_MAX_PAGES", "7")
+        monkeypatch.setenv("OCR_DPI", "300")
+        cfg = Config()
+        assert cfg.ocr_max_pages == 7
+        assert cfg.ocr_dpi == 300
+        svc = OCRService(cfg)
+        assert svc._max_pages == 7
+        assert svc._dpi == 300
+
+    def test_mock_ocr_deterministic_for_images(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mock OCR of the same PIL image must be stable across calls."""
+        from PIL import Image
+
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        svc = OCRService()
+        img = Image.new("RGB", (8, 8), color="white")
+        assert svc.ocr_image(img, OCR_PROMPT_TEXT) == svc.ocr_image(img, OCR_PROMPT_TEXT)
+
+
 class TestOcrImages:
     def test_ocr_images_mock_returns_text(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")

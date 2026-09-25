@@ -298,3 +298,13 @@ class TestResetPasswordRoute:
         with app.app_context():
             u = db.session.query(User).filter_by(username="reset3").one()
             assert verify_password("pw123456", u.password_hash)
+
+    def test_reset_form_matches_server_contract(self, client: object, app: object) -> None:
+        """Regression: the form must expose current_password and the 8-char policy."""
+        self._login(client, app, "reset4", "pw123456")
+        res = client.get("/reset-password")
+        assert res.status_code == 200
+        html = res.get_data(as_text=True)
+        assert 'name="current_password"' in html
+        assert 'name="new_password"' in html
+        assert "at least 8 characters" in html

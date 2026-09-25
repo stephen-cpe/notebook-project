@@ -7,9 +7,10 @@ overview generators so they share one consistent, deterministic, budgeted
 context-building path instead of each silently capping to a hardcoded count.
 
 - ``select_sources_within_budget(notebook_id, max_chars)`` returns the list of
-  source texts (ordered by upload time) that fit within ``max_chars``. At least
-  the first source is always included even if it exceeds the budget, so a
-  single oversized document still produces output. Dropped sources are logged.
+  source texts (ordered by upload time) that fit within ``max_chars``. The
+  budget is hard: an oversized source is truncated (with a marker) so a
+  single 25 MB document can never become a 25-million-character prompt.
+  Dropped sources are logged.
 """
 
 from __future__ import annotations
@@ -45,9 +46,11 @@ def select_sources_within_budget(notebook_id: int, max_chars: int) -> SourceSele
     """Select notebook source texts that fit within ``max_chars``.
 
     Sources are ordered by ``created_at`` (upload order) and included until the
-    running character total exceeds ``max_chars``. The first source is always
-    included even if it alone exceeds the budget. Sources with no cached text
-    in the ContentRegistry are skipped (not counted in ``total_count``).
+    running character total exceeds ``max_chars``. The budget is a hard limit:
+    a source that does not fit is truncated to the remaining budget (with a
+    ``[truncated]`` marker) instead of being included whole, so one oversized
+    document can never blow past the configured budget. Sources with no cached
+    text in the ContentRegistry are skipped (not counted in ``total_count``).
 
     Args:
         notebook_id: the notebook whose sources are selected.
@@ -78,13 +81,19 @@ def select_sources_within_budget(notebook_id: int, max_chars: int) -> SourceSele
 
     total_count = len(available_texts)
 
-    # Select as many sources as fit within the budget. The first source is
-    # always included even if it alone exceeds the budget, so a single
-    # oversized document still produces output.
+    # Select as many sources as fit within the budget. The budget is hard:
+    # a source that would overflow it is truncated to the remaining room
+    # (with a marker) so oversized documents still contribute a head excerpt
+    # without ever exceeding max_chars in total.
     texts: list[str] = []
     running = 0
     for text in available_texts:
-        if texts and running + len(text) > max_chars:
+        room = max_chars - running
+        if room <= 0:
+            break
+        if len(text) > room:
+            texts.append(text[:room] + "\n\n[truncated: source exceeds context budget]")
+            running += room
             break
         texts.append(text)
         running += len(text)

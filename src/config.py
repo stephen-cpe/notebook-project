@@ -81,6 +81,8 @@ class Config:
     ocr_max_image_dimension: int = field(
         default_factory=lambda: _int("OCR_MAX_IMAGE_DIMENSION", 2048)
     )
+    ocr_max_pages: int = field(default_factory=lambda: _int("OCR_MAX_PAGES", 30))
+    ocr_dpi: int = field(default_factory=lambda: _int("OCR_DPI", 150))
     poppler_path: str = field(default_factory=lambda: os.getenv("POPPLER_PATH", ""))
     # Provider: "local" (default, transformers on CPU/GPU) or "hf_inference"
     # (hosted HF Inference API — no local weights, per-call network latency).
@@ -203,6 +205,8 @@ class Config:
             "ocr_fallback_enabled": self.ocr_fallback_enabled,
             "ocr_text_threshold": self.ocr_text_threshold,
             "ocr_max_image_dimension": self.ocr_max_image_dimension,
+            "ocr_max_pages": self.ocr_max_pages,
+            "ocr_dpi": self.ocr_dpi,
             "poppler_path": self.poppler_path,
             "ocr_provider": self.ocr_provider,
             "ocr_inference_endpoint": _redact_secret(self.ocr_inference_endpoint),

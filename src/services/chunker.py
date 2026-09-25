@@ -33,6 +33,20 @@ def chunk_text(text: str) -> list[str]:
     return _get_splitter().split_text(text)
 
 
+def chunk_units(units: list[tuple[str, int | None]]) -> list[tuple[str, int | None]]:
+    """Split per-location units, preserving each chunk's page.
+
+    Each input is ``(text, page)`` where ``page`` is a real PDF page / PPTX
+    slide number or ``None``. Returns ``(chunk, page)`` pairs so citations
+    carry true locations instead of fabricated chunk indices.
+    """
+    out: list[tuple[str, int | None]] = []
+    for text, page in units:
+        for chunk in chunk_text(text):
+            out.append((chunk, page))
+    return out
+
+
 def chunk_with_metadata(
     text: str, base_metadata: dict[str, Any] | None = None
 ) -> list[dict[str, Any]]:

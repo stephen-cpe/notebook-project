@@ -19,7 +19,7 @@ from flask_login import current_user, login_required
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from src.repositories import notebook_repo
-from src.routes._helpers import require_owner
+from src.routes._helpers import require_owner, trigger_summary_job
 
 notebooks_bp = Blueprint("notebooks", __name__)
 
@@ -43,12 +43,25 @@ def create_notebook() -> ViewReturn:
     description = (request.form.get("description") or "").strip() or None
     if not name:
         flash("Notebook name is required.", category="error")
-        return render_template("notebooks/list.html"), 400
+        return (
+            render_template(
+                "notebooks/list.html",
+                notebooks=notebook_repo.list_by_user(int(current_user.get_id())),
+            ),
+            400,
+        )
     if len(name) > 120:
         flash("Notebook name must be 120 characters or fewer.", category="error")
-        return render_template("notebooks/list.html"), 400
+        return (
+            render_template(
+                "notebooks/list.html",
+                notebooks=notebook_repo.list_by_user(int(current_user.get_id())),
+            ),
+            400,
+        )
     uid = int(current_user.get_id())
-    notebook_repo.create_notebook(uid, name, description)
+    notebook = notebook_repo.create_notebook(uid, name, description)
+    trigger_summary_job(notebook.id)
     flash(f"Notebook '{name}' created.", category="success")
     return redirect(url_for("notebooks.list_notebooks"))
 

@@ -87,9 +87,11 @@ class Notebook(db.Model):  # type: ignore[name-defined, misc]
     audio_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     audio_status: Mapped[str] = mapped_column(String(20), nullable=False, default=AUDIO_STATUS_NONE)
     audio_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audio_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     video_status: Mapped[str] = mapped_column(String(20), nullable=False, default=VIDEO_STATUS_NONE)
     video_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    video_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         default=lambda: datetime.now(UTC), nullable=False, onupdate=lambda: datetime.now(UTC)
@@ -177,6 +179,7 @@ class ContentRegistry(db.Model):  # type: ignore[name-defined, misc]
 
     content_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     chroma_collection: Mapped[str] = mapped_column(String(80), nullable=False)
+    embedding_fingerprint: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC), nullable=False)

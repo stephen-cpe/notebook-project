@@ -12,8 +12,8 @@ storage hiccup never blocks a user-facing delete.
 
 from __future__ import annotations
 
-import contextlib
 import logging
+import shutil
 from pathlib import Path
 
 from src.repositories import content_registry_repo, source_repo
@@ -42,16 +42,29 @@ def cleanup_orphaned_content(content_hash: str, exclude_source_id: int | None = 
         )
         return False
 
-    # No remaining references — delete the Chroma collection and registry row.
+    # No remaining references — delete the Chroma collection first. The
+    # registry row holds the only rebuild copy, so it is removed only after
+    # the vector deletion is confirmed. A failed vector deletion keeps the
+    # registry (and returns False) so a later cleanup can retry instead of
+    # destroying the only recovery copy.
     try:
-        get_vector_store().delete_collection(content_hash)
+        vector_deleted = get_vector_store().delete_collection(content_hash)
     except Exception as exc:  # noqa: BLE001
         logger.warning("cleanup_orphaned_content: delete_collection failed: %s", exc)
+        vector_deleted = False
+    if not vector_deleted:
+        logger.warning(
+            "cleanup_orphaned_content: keeping registry for hash %s; "
+            "vector deletion unconfirmed, will retry on next cleanup.",
+            content_hash[:12],
+        )
+        return False
 
     try:
         content_registry_repo.delete_entry(content_hash)
     except Exception as exc:  # noqa: BLE001
         logger.warning("cleanup_orphaned_content: delete_entry failed: %s", exc)
+        return False
 
     logger.info("cleanup_orphaned_content: removed orphaned content for hash %s", content_hash[:12])
     return True
@@ -66,13 +79,9 @@ def cleanup_notebook_media(notebook_id: int, data_dir: str) -> None:
     for sub in ("audio", "video", "voice"):
         media_dir = Path(data_dir) / sub / str(notebook_id)
         if media_dir.exists():
-            for f in media_dir.iterdir():
-                try:
-                    f.unlink(missing_ok=True)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("cleanup_notebook_media: cannot delete %s: %s", f, exc)
-            with contextlib.suppress(OSError):
-                media_dir.rmdir()
+            # Recursive: job temp dirs (tmp_<jobid>/) live under these and a
+            # plain rmdir would silently leave them behind.
+            shutil.rmtree(media_dir, ignore_errors=True)
             logger.info("cleanup_notebook_media: removed %s", media_dir)
 
 

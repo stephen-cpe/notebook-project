@@ -162,7 +162,7 @@ def settings() -> ViewReturn:
 def reset_password() -> ViewReturn:
     if request.method == "POST":
         current_password = request.form.get("current_password") or ""
-        new_password = (request.form.get("new_password") or "").strip()
+        new_password = request.form.get("new_password") or ""
         if not new_password:
             flash("New password is required.", "error")
             return redirect(url_for("auth.reset_password"))

@@ -66,6 +66,14 @@ class TestRequestVideo:
         res = client.post(f"/notebooks/{nb_id}/video")
         assert res.status_code == 404
 
+    def test_busy_returns_409(self, client: object, app: object) -> None:
+        """A second launch while a job is transient must be rejected."""
+        _login(client, app, "vidroute15")
+        nb_id = _create_notebook(client, app)
+        _set_video(app, nb_id, None, "queued")
+        res = client.post(f"/notebooks/{nb_id}/video")
+        assert res.status_code == 409
+
 
 class TestVideoStatus:
     def test_returns_status(self, client: object, app: object) -> None:
@@ -87,6 +95,26 @@ class TestVideoStatus:
         res = client.get(f"/notebooks/{nb_id}/video/status")
         assert res.status_code == 200
         assert res.get_json()["has_video"] is True
+
+    def test_missing_file_reports_no_video(self, client: object, app: object) -> None:
+        """A stale path pointing at a deleted file must not claim video exists."""
+        _login(client, app, "vidroute16")
+        nb_id = _create_notebook(client, app)
+        _set_video(app, nb_id, "/nonexistent/missing.mp4", "ready")
+        res = client.get(f"/notebooks/{nb_id}/video/status")
+        assert res.get_json()["has_video"] is False
+
+    def test_status_exposes_error(self, client: object, app: object) -> None:
+        _login(client, app, "vidroute17")
+        nb_id = _create_notebook(client, app)
+        with app.app_context():
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            nb.video_status = "failed"
+            nb.video_error = "All narrations failed to synthesize."
+            db.session.commit()
+        res = client.get(f"/notebooks/{nb_id}/video/status")
+        assert res.get_json()["error"] == "All narrations failed to synthesize."
 
     def test_non_owner_404(self, client: object, app: object) -> None:
         _login(client, app, "vidroute6")
@@ -158,6 +186,21 @@ class TestDeleteVideo:
         _set_video(app, nb_id, None, "none")
         res = client.delete(f"/notebooks/{nb_id}/video")
         assert res.status_code == 200
+
+    def test_delete_bumps_generation(self, client: object, app: object) -> None:
+        """Delete must invalidate a still-running job's generation."""
+        _login(client, app, "vidroute18")
+        nb_id = _create_notebook(client, app)
+        with app.app_context():
+            before = db.session.get(Notebook, nb_id)
+            assert before is not None
+            gen_before = before.video_generation
+        res = client.delete(f"/notebooks/{nb_id}/video")
+        assert res.status_code == 200
+        with app.app_context():
+            after = db.session.get(Notebook, nb_id)
+            assert after is not None
+            assert after.video_generation == gen_before + 1
 
     def test_delete_relative_path(
         self, client: object, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

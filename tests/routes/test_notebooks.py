@@ -57,6 +57,23 @@ class TestCreateNotebook:
         res = client.post("/notebooks", data={"name": "x"}, follow_redirects=False)
         assert res.status_code in (301, 302, 303)
 
+    def test_create_triggers_summary_job(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: notebook creation must launch automatic summary regen."""
+        import src.services.jobs as jobs_mod
+
+        launched: list[int] = []
+        monkeypatch.setattr(
+            jobs_mod, "launch_summary_job", lambda notebook_id, app: launched.append(notebook_id)
+        )
+        _login(client, app, "nbuser3", "pw123")
+        res = client.post("/notebooks", data={"name": "Auto Summary NB"})
+        assert res.status_code in (200, 201, 302)
+        with app.app_context():
+            nb = db.session.query(Notebook).filter_by(name="Auto Summary NB").one()
+            assert launched == [nb.id]
+
 
 class TestListNotebooks:
     def test_lists_own_only(self, client: object, app: object) -> None:

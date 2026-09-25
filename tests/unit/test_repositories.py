@@ -159,6 +159,18 @@ class TestChatRepo:
             assert count == 1
             assert chat_repo.list_by_notebook(nb.id) == []
 
+    def test_list_returns_newest_window_oldest_first(self, app: object) -> None:
+        """Regression: history must return the most recent 100, not the oldest."""
+        with app.app_context():
+            u = user_repo.create_user("chatrepo3", "hash")
+            nb = notebook_repo.create_notebook(u.id, "NB")
+            for i in range(105):
+                chat_repo.create_message(nb.id, "user", f"msg-{i:03d}")
+            msgs = chat_repo.list_by_notebook(nb.id)
+            assert len(msgs) == 100
+            assert msgs[0].content == "msg-005"
+            assert msgs[-1].content == "msg-104"
+
 
 class TestContentRegistryRepo:
     def test_create_and_get(self, app: object) -> None:

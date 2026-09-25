@@ -15,6 +15,7 @@ Supported types and libraries:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,12 @@ TYPE_TO_EXTENSIONS = {
     "txt": ".txt",
     "md": ".md",
 }
+
+# Resource bounds for ZIP-based Office media extraction (zip-bomb protection).
+# Checked against ZIP metadata *before* member data is read into memory.
+_MAX_ARCHIVE_MEMBERS = 100
+_MAX_ARCHIVE_MEMBER_BYTES = 25 * 1024 * 1024
+_MAX_ARCHIVE_TOTAL_BYTES = 100 * 1024 * 1024
 
 
 def detect_content_type(filename: str) -> str:
@@ -91,8 +98,96 @@ def parse_pdf_with_pages(path: str) -> tuple[str, int]:
     return "\n\n".join(parts), len(reader.pages)
 
 
+def parse_pdf_pages(path: str) -> list[tuple[int, str]]:
+    """Extract per-page ``(page_number, text)`` from a PDF.
+
+    Page numbers are 1-based and always reflect the real document page,
+    so chunks built from these units cite correct pages. Empty pages
+    are skipped (their numbers are simply absent from the result).
+    """
+    from pypdf import PdfReader
+
+    reader = PdfReader(path)
+    pages: list[tuple[int, str]] = []
+    for n, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        if text.strip():
+            pages.append((n, text))
+    return pages
+
+
+@dataclass
+class TextUnit:
+    """A chunkable text span with its real location.
+
+    ``page`` is the 1-based PDF page or PPTX slide number, or ``None``
+    for formats/locations without pages (TXT/MD/DOCX, OCR images).
+    """
+
+    text: str
+    page: int | None
+
+
+def extract_units(path: str, content_type: str) -> tuple[list[TextUnit], int | None]:
+    """Extract location-aware text units plus a page/slide count.
+
+    Returns ``(units, page_count)`` where ``page_count`` is the total PDF
+    page or PPTX slide count (``None`` for other types). Raises
+    ``IngestionError`` for missing files or unsupported types, mirroring
+    ``extract_text``.
+    """
+    p = Path(path)
+    if not p.exists():
+        raise IngestionError(f"File not found: {path}")
+    if content_type == "pdf":
+        from pypdf import PdfReader
+
+        reader = PdfReader(path)
+        units: list[TextUnit] = []
+        for n, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                units.append(TextUnit(text=text, page=n))
+        return units, len(reader.pages)
+    if content_type == "pptx":
+        from pptx import Presentation
+
+        prs = Presentation(path)
+        units = [
+            TextUnit(text=text, page=n)
+            for n, text in _slides_from_presentation(prs)
+            if text.strip()
+        ]
+        return units, len(prs.slides)
+    if content_type == "docx":
+        return [TextUnit(text=parse_docx(path), page=None)], None
+    if content_type in ("txt", "md"):
+        return [TextUnit(text=parse_text_file(path), page=None)], None
+    raise IngestionError(f"Unsupported content type: {content_type!r}")
+
+
+def _slides_from_presentation(prs: Any) -> list[tuple[int, str]]:  # noqa: ANN401
+    """Collect ``(slide_number, text)`` from an open PPTX presentation."""
+    slides: list[tuple[int, str]] = []
+    for n, slide in enumerate(prs.slides, start=1):
+        slide_texts: list[str] = []
+        for shape in slide.shapes:
+            slide_texts.extend(_iter_shape_texts(shape))
+        notes = _extract_slide_notes(slide)
+        if notes:
+            slide_texts.append(notes)
+        if slide_texts:
+            slides.append((n, "\n".join(slide_texts)))
+    return slides
+
+
 def parse_docx(path: str) -> str:
-    """Extract text from a DOCX using python-docx."""
+    """Extract text from a DOCX using python-docx.
+
+    Includes body paragraphs, tables (row cells joined with ``|``),
+    and headers/footers so tabular and peripheral content is not silently
+    dropped from retrieval and summaries.
+    """
     from docx import Document
 
     doc = Document(path)
@@ -100,26 +195,77 @@ def parse_docx(path: str) -> str:
     for para in doc.paragraphs:
         if para.text and para.text.strip():
             parts.append(para.text)
+    for i, table in enumerate(doc.tables):
+        rows: list[str] = []
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                rows.append(" | ".join(cells))
+        if rows:
+            parts.append(f"[Table {i + 1}]\n" + "\n".join(rows))
+    for section in doc.sections:
+        for container in (section.header, section.footer):
+            for para in container.paragraphs:
+                if para.text and para.text.strip():
+                    parts.append(para.text)
     return "\n\n".join(parts)
 
 
 def parse_pptx(path: str) -> str:
-    """Extract text from a PPTX using python-pptx."""
+    """Extract text from a PPTX using python-pptx (all slides joined)."""
+    return "\n\n".join(text for _, text in parse_pptx_slides(path))
+
+
+def parse_pptx_slides(path: str) -> list[tuple[int, str]]:
+    """Extract per-slide ``(slide_number, text)`` from a PPTX.
+
+    Covers text frames, tables, grouped shapes (recursively), and speaker
+    notes so slide content beyond plain text boxes reaches retrieval.
+    Slide numbers are 1-based. Slides without text are skipped.
+    """
     from pptx import Presentation
 
-    prs = Presentation(path)
-    parts: list[str] = []
-    for slide in prs.slides:
-        slide_texts: list[str] = []
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    txt = para.text
-                    if txt and txt.strip():
-                        slide_texts.append(txt)
-        if slide_texts:
-            parts.append("\n".join(slide_texts))
-    return "\n\n".join(parts)
+    return _slides_from_presentation(Presentation(path))
+
+
+def _iter_shape_texts(shape: Any) -> list[str]:  # noqa: ANN401
+    """Recursively collect text from a PPTX shape (groups/tables/frames)."""
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    try:
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            texts: list[str] = []
+            for sub in shape.shapes:
+                texts.extend(_iter_shape_texts(sub))
+            return texts
+        if shape.has_table:
+            cells: list[str] = []
+            for row in shape.table.rows:
+                row_cells = [cell.text.strip() for cell in row.cells]
+                if any(row_cells):
+                    cells.append(" | ".join(row_cells))
+            return cells
+        if shape.has_text_frame:
+            return [
+                para.text for para in shape.text_frame.paragraphs if para.text and para.text.strip()
+            ]
+    except Exception:  # noqa: BLE001
+        logger.debug("Skipping unreadable PPTX shape", exc_info=True)
+    return []
+
+
+def _extract_slide_notes(slide: Any) -> str:  # noqa: ANN401
+    """Return a slide's speaker-notes text, or "" when absent."""
+    try:
+        notes_slide = slide.notes_slide
+        parts = [
+            shape.text
+            for shape in notes_slide.placeholders
+            if shape.has_text_frame and shape.text and shape.text.strip()
+        ]
+        return "\n".join(parts)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def parse_text_file(path: str) -> str:
@@ -151,6 +297,11 @@ def _extract_zip_media(path: str, media_prefix: str) -> list[Any]:
     """Extract images from a ZIP-based Office file under ``media_prefix``.
 
     Used by both DOCX (``word/media/``) and PPTX (``ppt/media/``) extraction.
+
+    Resource bounds (zip-bomb protection): entry count, per-member sizes, and
+    total uncompressed size are capped *before* reading member data. A file
+    exceeding the caps yields no images (with a warning) rather than risking
+    memory exhaustion.
     """
     import io
     import zipfile
@@ -160,10 +311,40 @@ def _extract_zip_media(path: str, media_prefix: str) -> list[Any]:
     images: list[Any] = []
     try:
         with zipfile.ZipFile(path) as z:
-            for name in z.namelist():
-                if not name.startswith(media_prefix):
+            members = [info for info in z.infolist() if info.filename.startswith(media_prefix)]
+            if len(members) > _MAX_ARCHIVE_MEMBERS:
+                logger.warning(
+                    "Skipping media extraction for %s: %d members exceeds limit %d",
+                    path,
+                    len(members),
+                    _MAX_ARCHIVE_MEMBERS,
+                )
+                return []
+            total_uncompressed = 0
+            for info in members:
+                if info.is_dir():
                     continue
-                with z.open(name) as fh:
+                if info.file_size > _MAX_ARCHIVE_MEMBER_BYTES:
+                    logger.warning(
+                        "Skipping oversized archive member %s (%d bytes) in %s",
+                        info.filename,
+                        info.file_size,
+                        path,
+                    )
+                    continue
+                total_uncompressed += info.file_size
+                if total_uncompressed > _MAX_ARCHIVE_TOTAL_BYTES:
+                    logger.warning(
+                        "Skipping media extraction for %s: total uncompressed size "
+                        "exceeds limit %d bytes",
+                        path,
+                        _MAX_ARCHIVE_TOTAL_BYTES,
+                    )
+                    return []
+            for info in members:
+                if info.is_dir() or info.file_size > _MAX_ARCHIVE_MEMBER_BYTES:
+                    continue
+                with z.open(info) as fh:
                     images.append(Image.open(io.BytesIO(fh.read())).convert("RGB"))
     except Exception as exc:  # noqa: BLE001
         logger.warning("Failed to extract images from %s: %s", path, exc)
