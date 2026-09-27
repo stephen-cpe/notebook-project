@@ -1,6 +1,6 @@
 # Architecture Document -- notebook-project
 
-**Version:** 0.1
+**Version:** 0.2
 
 This document defines the module layout, data model, sequence flows, and tech
 choices for the implemented codebase.
@@ -20,7 +20,7 @@ choices for the implemented codebase.
 | 7 | Source panel | List + modal detail + inline actions (view text, rename, delete). |
 | 8 | Embedding/OCR provider | Both support `local` (default) and `hf_inference` (opt-in). |
 | 9 | Vector store backend | `CHROMA_DB=local` (default) or `CHROMA_DB=cloud` with graceful fallback. |
-| 10 | Voice conversation | Push-to-talk via HTTP `/voice/turn` endpoint: record audio, transcribe with faster-whisper, answer via `ChatService.chat_sync`, synthesize reply via edge-TTS. A `/voice` SocketIO namespace provides real-time status notifications. The spoken reply has markdown and citation brackets stripped for natural narration. Disabled by default (`VOICE_ENABLED=false`). |
+| 10 | Voice mode | Toggle hands-free conversation over HTTP `/voice/turn`: the mic stays open, utterances auto-send on pause (client VAD), transcribe with faster-whisper, answer via `ChatService.chat_sync`, synthesize reply via edge-TTS with auto-play and barge-in. A `/voice` SocketIO namespace still exists server-side, but the V2 web client is HTTP-only and tracks status locally. The spoken reply has markdown and citation brackets stripped for natural narration. Disabled by default (`VOICE_ENABLED=false`). |
 | 11 | Overview source selection | Summary, audio, and video generators share one `select_sources_within_budget()` helper (`context_builder.py`) that orders sources by upload time (`created_at`) and includes as many as fit within `OVERVIEW_MAX_CONTEXT_CHARS` (default 30000). The first source is always included even if oversized. Dropped sources are logged. |
 | 12 | OCR fallback scope | GLM-OCR runs on PDF (rendered to images via Poppler), DOCX (embedded images extracted from `word/media/`), and PPTX (embedded images from `ppt/media/`). TXT/MD never trigger OCR (no images). OCR is only attempted when embedded images exist; text-only DOCX/PPTX with sparse text skip OCR. |
 
@@ -94,7 +94,7 @@ notebook-project/
 |   |   |-- cleanup_service.py  # reference-counted content cleanup on delete
 |   |   `-- jobs.py             # background workers (audio, video, summary)
 |   |-- realtime/
-|   |   `-- __init__.py         # /voice SocketIO namespace (status notifications)
+|   |   `-- __init__.py         # /voice SocketIO namespace (server-side; V2 web client is HTTP-only)
 |   |-- routes/
 |   |   |-- __init__.py          # blueprint registration + error handlers + CSP
 |   |   |-- _helpers.py          # require_owner, require_admin
@@ -113,7 +113,7 @@ notebook-project/
 |   |   |-- js/chat-markdown.js    # lightweight markdown-to-HTML renderer (no external libs)
 |   |   |-- js/chat-ui.js        # shared chat helpers (appendMessage, typing indicator, sources)
 |   |   |-- js/app.js            # upload, chat, audio, video, source actions
-|   |   |-- js/voice.js          # push-to-talk recording + voice turn
+|   |   |-- js/voice.js          # voice-mode toggle: VAD loop, auto-send, barge-in + voice turn
 |   |   `-- js/settings.js
 |   `-- templates/
 |       |-- base.html
@@ -212,7 +212,7 @@ POST /notebooks/<id>/video -> routes/video.py
     5. persist video_path, status=ready
 ```
 
-### 5.5 Voice conversation
+### 5.5 Voice mode
 
 ```
 POST /notebooks/<id>/voice/turn -> routes/voice.py
@@ -227,9 +227,17 @@ POST /notebooks/<id>/voice/turn -> routes/voice.py
   serve reply via GET /voice/reply/<filename>
 ```
 
-SocketIO `/voice` namespace provides real-time status notifications
-(connected, ready, transcribing, thinking, speaking, done). Audio is sent via
-the HTTP endpoint, not via SocketIO binary events.
+Client (`js/voice.js`, V2): the mic button toggles voice mode, swapping the
+text input for a voice panel (status orb, live transcript, End button). One
+`getUserMedia` stream serves the whole session; a per-utterance
+`MediaRecorder` plus `AnalyserNode` voice-activity detection auto-sends after
+~1.2 s of silence (max-length fallback). Replies auto-play, then listening
+resumes; speech during playback barges in, speech while thinking aborts the
+request. Turns render through the shared `ChatUI` helpers.
+
+The SocketIO `/voice` namespace is still registered server-side, but the V2
+web client does not connect to it -- status is tracked locally and audio has
+always gone over the HTTP endpoint, never SocketIO binary events.
 
 ### 5.6 Content cleanup on delete
 

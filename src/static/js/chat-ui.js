@@ -1,6 +1,6 @@
 /* notebook-project — shared chat UI helpers.
  *
- * Used by both app.js (regular text chat) and voice.js (push-to-talk) so that
+ * Used by both app.js (regular text chat) and voice.js (voice mode) so that
  * voice turns and text turns render with identical bubble styling, typing
  * indicators, and source citation badges.
  */

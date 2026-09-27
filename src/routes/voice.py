@@ -1,6 +1,6 @@
-"""Voice conversation routes.
+"""Voice mode routes.
 
-HTTP push-to-talk endpoints. SocketIO is optional and registered separately
+HTTP voice-turn endpoints (toggle hands-free client). SocketIO is optional and registered separately
 when ``VOICE_ENABLED`` and Flask-SocketIO are available (see ``src/app.py``
 wiring). These HTTP routes handle audio upload and reply serving.
 """

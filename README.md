@@ -1,8 +1,8 @@
 # notebook-project
 
 A self-hosted, Flask + PostgreSQL + ChromaDB RAG application with
-source-grounded chat, audio/video overviews, and push-to-talk voice
-conversation. Upload source documents, ask questions grounded in those sources
+source-grounded chat, audio/video overviews, and hands-free voice mode.
+Upload source documents, ask questions grounded in those sources
 with inline citations, generate spoken and narrated-video summaries, and
 converse with your notebook by voice.
 
@@ -25,8 +25,9 @@ for the full requirements and architecture.
 - Chat history with clear button.
 - Two-host Audio Overview via edge-TTS with optional focus topic.
 - Video Overview: narrated slide presentation rendered to MP4 via ffmpeg.
-- Voice conversation: push-to-talk, transcribe via faster-whisper, RAG-grounded
-  answer, spoken reply via edge-TTS. Voice turns persisted to chat history.
+- Voice mode: toggle the mic to talk hands-free, transcribe via faster-whisper,
+  RAG-grounded answer, spoken reply via edge-TTS with barge-in. Voice turns
+  persisted to chat history.
 - Three-panel UI (Sources / Chat / Config) with Bootstrap 5 + dark theme.
 
 ## Prerequisites
@@ -186,7 +187,7 @@ Optional provider configuration:
 
 ### 7. (Optional) Enable Voice Conversation
 
-Voice conversation (push-to-talk) is disabled by default. The voice
+Voice mode is disabled by default. The voice
 dependencies (`flask-socketio`, `faster-whisper`) are already
 listed in `requirements.txt`, so the standard install in step 3 covers them.
 To enable the feature:
@@ -202,10 +203,13 @@ To enable the feature:
    pydub audio).
 
 The microphone button appears to the left of the chat Send button on the
-notebook page. Press and hold to record (or Space/Enter when focused), release
-to send. Voice turns are persisted to the same chat history as text turns.
-When the SocketIO streaming layer is available it provides real-time status
-notifications; the HTTP endpoint handles the audio upload and processing.
+notebook page. Click it once to enter voice mode: the text input is replaced
+by a voice panel (status orb, live transcript, End button). Speak hands-free --
+utterances auto-send after a short pause -- and the spoken reply plays
+automatically before listening resumes. Talking over the reply interrupts it
+(barge-in). Click the mic / End (or Esc) to return to text chat. Voice turns
+are persisted to the same chat history as text turns. All audio goes over the
+HTTP `/voice/turn` endpoint; no browser plugin is required.
 
 ### 8. Run the application
 

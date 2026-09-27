@@ -1,14 +1,14 @@
 # Software Requirements Specification -- notebook-project
 
-**Version:** 0.1
+**Version:** 0.2
 
 ---
 
 ## 1. Purpose
 
 `notebook-project` is a self-hosted, Flask + PostgreSQL + ChromaDB RAG
-application with source-grounded chat, audio/video overviews, and push-to-talk
-voice conversation. Upload source documents, ask questions grounded in those
+application with source-grounded chat, audio/video overviews, and hands-free
+voice mode. Upload source documents, ask questions grounded in those
 sources with inline citations, generate spoken and narrated-video summaries,
 and converse with your notebook by voice.
 
@@ -42,9 +42,10 @@ and converse with your notebook by voice.
    notebook's sources, rendered to a single MP3 via edge-TTS.
 9. **Video Overview** -- a narrated slide presentation generated from the
    notebook's sources, rendered to MP4 via ffmpeg with TTS narration.
-10. **Voice conversation** -- push-to-talk: record audio, transcribe via local
-    faster-whisper, get a RAG-grounded answer, and hear the spoken reply via
-    edge-TTS. Voice turns are persisted to the same chat history as text.
+10. **Voice mode** -- toggle the mic to talk hands-free: utterances auto-send
+    on pause, are transcribed via local faster-whisper, answered with the same
+    RAG pipeline as text chat, and hear the spoken reply via edge-TTS with
+    barge-in. Voice turns are persisted to the same chat history as text.
 11. **Three-panel UI** -- sources (left), chat (center), config (right), built
     with Bootstrap 5 + custom dark theme.
 
@@ -80,7 +81,7 @@ and converse with your notebook by voice.
 | Groundedness | A heuristic check that the answer's substantive terms appear in retrieved context. |
 | Audio Overview | A two-host spoken dialogue summarizing the notebook's sources, produced via edge-TTS. |
 | Video Overview | A narrated slide presentation summarizing the notebook's sources, produced via ffmpeg + edge-TTS. |
-| Voice conversation | Push-to-talk: record audio, transcribe (faster-whisper), answer (RAG + LLM), speak reply (edge-TTS). |
+| Voice mode | Toggle hands-free conversation: auto-send on pause, transcribe (faster-whisper), answer (RAG + LLM), speak reply (edge-TTS) with barge-in. |
 | Thinking token | Gemma 4's `<|think|>` system-prompt token; server-side config flag, not a UI control. |
 
 ## 5. Functional Requirements
@@ -171,15 +172,22 @@ and converse with your notebook by voice.
 - **FR-93** Requires ffmpeg on PATH.
 - **FR-94** Re-generate and delete supported.
 
-### 5.10 Voice conversation
+### 5.10 Voice mode
 
-- **FR-100** Push-to-talk: press and hold the mic button to record, release to
-  send. Audio is transcribed via faster-whisper (local, mock in test mode).
+- **FR-100** Toggle voice mode: click the mic button once to replace the text
+  input with a voice panel (status orb, live transcript, End button); click
+  the mic / End (or Esc) to return to text chat. The mic stays open while in
+  voice mode -- no press-and-hold. Utterances auto-send after a short pause
+  (client-side voice-activity detection) with a max-length fallback
+  (`VOICE_MAX_RECORDING_SECONDS`). Audio is transcribed via faster-whisper
+  (local, mock in test mode).
 - **FR-101** The transcribed question is answered using the same RAG pipeline
   as text chat (guardrails, retrieval, LLM, groundedness, persistence).
-- **FR-102** The answer is synthesized to speech via edge-TTS and played back.
-  Markdown and citation brackets are stripped from the spoken version for
-  natural narration.
+- **FR-102** The answer is synthesized to speech via edge-TTS, played back
+  automatically, and listening resumes when playback ends. Markdown and
+  citation brackets are stripped from the spoken version for natural
+  narration. Talking over the reply interrupts it (barge-in); talking while
+  the answer is being prepared cancels the request and re-listens.
 - **FR-103** Voice turns are persisted to the same chat history as text turns.
 - **FR-104** Disabled by default (`VOICE_ENABLED=false`); the mic button is
   hidden when disabled.
@@ -190,7 +198,8 @@ and converse with your notebook by voice.
   Bootstrap 5 dark theme.
 - **FR-82** Sources panel: status badges, upload, rename, delete, view text.
 - **FR-83** Chat panel: history, streaming with typing indicator, citation
-  tags, clear button, suggested questions, mic button (when voice enabled).
+  tags, clear button, suggested questions, mic toggle button (when voice
+  enabled) that swaps the text input for the voice panel.
 - **FR-84** Config panel: audio/video controls, focus topic, metadata.
 - **FR-85** Loading states for all long-running actions.
 
@@ -289,6 +298,7 @@ and converse with your notebook by voice.
 - All FR-1 ... FR-104 implemented with passing tests.
 - A user can: sign up -> create a notebook -> upload sources -> see ingestion
   complete -> see summary + suggested questions -> chat with citations ->
-  generate audio overview -> generate video overview -> use push-to-talk voice
-  conversation -> log out and back in and see everything persisted.
+  generate audio overview -> generate video overview -> use voice mode
+  (toggle, auto-send, barge-in) -> log out and back in and see everything
+  persisted.
 - No secrets committed; `.env.example` is the only env file in VCS.
