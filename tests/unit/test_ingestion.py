@@ -18,7 +18,9 @@ Covers:
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
+import pypdf
 import pytest
 
 from src.extensions import db
@@ -128,6 +130,28 @@ class TestIngestFile:
         assert result.status == "ready"
         assert "machine learning" in result.extracted_text.lower()
         assert result.page_count == 2
+
+    def test_ingest_pdf_reads_file_once(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A PDF ingest must pay for exactly one PdfReader traversal."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        svc = IngestionService()
+
+        real_reader = pypdf.PdfReader
+        reads = 0
+
+        def _counting_reader(*args: object, **kwargs: object) -> object:
+            nonlocal reads
+            reads += 1
+            return real_reader(*args, **kwargs)
+
+        with app.app_context(), patch("pypdf.PdfReader", side_effect=_counting_reader):
+            result = svc.ingest_file(str(FIXTURES / "sample.pdf"), filename="sample.pdf")
+
+        assert result.status == "ready"
+        assert result.page_count == 2
+        assert reads == 1
 
     def test_ingest_docx(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CI", "true")

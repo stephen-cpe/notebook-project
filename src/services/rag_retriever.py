@@ -7,7 +7,6 @@ cached text and re-queries.
 
 Functions:
 - ``retrieve_with_sources(hashes, query, top_k)`` -> list of provenance dicts.
-- ``retrieve(hashes, query, top_k)`` -> joined context text.
 - ``build_context_string(results)`` -> formatted context for the LLM prompt.
 - ``format_sources(results)`` -> deduplicated source list for citations.
 """
@@ -67,17 +66,6 @@ class RAGRetriever:
             all_results.extend(partial)
         all_results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
         return all_results[:top_k]
-
-    def retrieve(
-        self,
-        content_hashes: list[str],
-        query: str,
-        top_k: int = 5,
-        filenames: dict[str, str] | None = None,
-    ) -> str:
-        """Like ``retrieve_with_sources`` but returns joined context text."""
-        results = self.retrieve_with_sources(content_hashes, query, top_k, filenames=filenames)
-        return build_context_string(results)
 
     # ------------------------------------------------------------------
     # Corruption recovery

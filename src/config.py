@@ -133,13 +133,6 @@ class Config:
     hf_timeout_seconds: int = field(default_factory=lambda: _int("HF_TIMEOUT_SECONDS", 60))
 
     # Audio
-    audio_voice_a: str = field(
-        default_factory=lambda: os.getenv("AUDIO_VOICE_A", "en-US-AvaNeural")
-    )
-    audio_voice_b: str = field(
-        default_factory=lambda: os.getenv("AUDIO_VOICE_B", "en-US-AndrewNeural")
-    )
-    audio_format: str = field(default_factory=lambda: os.getenv("AUDIO_FORMAT", "mp3"))
     overview_min_duration_seconds: int = field(
         default_factory=lambda: _int("OVERVIEW_MIN_DURATION_SECONDS", 60)
     )
@@ -229,9 +222,6 @@ class Config:
             "voice_max_recording_seconds": self.voice_max_recording_seconds,
             "voice_max_upload_mb": self.voice_max_upload_mb,
             "voice_tts_fallback_speaker": self.voice_tts_fallback_speaker,
-            "audio_voice_a": self.audio_voice_a,
-            "audio_voice_b": self.audio_voice_b,
-            "audio_format": self.audio_format,
             "overview_min_duration_seconds": self.overview_min_duration_seconds,
             "overview_max_duration_seconds": self.overview_max_duration_seconds,
             "overview_max_context_chars": self.overview_max_context_chars,

@@ -7,8 +7,10 @@ the end user (no selector in the UI). Thinking is enabled server-side via the
 Behavior:
 - ``AI_MOCK=true``: deterministic mock returns canned text / word chunks.
   No network calls (used in tests/CI).
-- Real mode: POSTs to ``{OLLAMA_CLOUD_BASE_URL}/api/chat`` (Ollama-native) or
-  ``/v1/chat/completions`` (OpenAI-compatible). Retries once on failure.
+- Real mode: POSTs to ``{OLLAMA_CLOUD_BASE_URL}/api/chat`` (Ollama-native).
+  Retries once on transient failures only (connection errors, HTTP 5xx).
+  Timeouts and HTTP 4xx (e.g. bad API key) fail fast with a clear message
+  instead of being retried and misreported as "unavailable".
 
 Gemma 4 output format when thinking is enabled:
   ``<|channel|thought\\n [internal reasoning] <channel|> [final answer]``
@@ -140,11 +142,19 @@ class OllamaClient:
     # ------------------------------------------------------------------
 
     def _chat_with_retry(self, messages: list[dict[str, str]]) -> str:
-        """Call ``_real_chat`` with one retry on failure."""
+        """Call ``_real_chat`` with one retry on transient failure.
+
+        Timeouts and client errors (``AITimeoutError``,
+        ``AIModelUnavailableError``) fail fast: retrying a request that
+        already consumed the full timeout doubles user-visible latency, and
+        retrying a 4xx only delays an actionable config error.
+        """
         last_exc: Exception | None = None
         for attempt in range(2):
             try:
                 return self._real_chat(messages)
+            except (AITimeoutError, AIModelUnavailableError):
+                raise
             except (ConnectionError, TimeoutError, requests.ConnectionError) as exc:
                 last_exc = exc
                 logger.warning("Chat attempt %d failed: %s", attempt + 1, exc)
@@ -159,7 +169,8 @@ class OllamaClient:
         Retries only if nothing was emitted yet: retrying after tokens were
         already delivered would duplicate the partial answer on the client and
         in the persisted message. A mid-stream failure raises instead so the
-        caller can surface an explicit error frame.
+        caller can surface an explicit error frame. Timeouts and client
+        errors fail fast (see ``_chat_with_retry``).
         """
         last_exc: Exception | None = None
         for attempt in range(2):
@@ -169,6 +180,8 @@ class OllamaClient:
                     emitted_any = True
                     yield token
                 return
+            except (AITimeoutError, AIModelUnavailableError):
+                raise
             except (ConnectionError, TimeoutError, requests.ConnectionError) as exc:
                 last_exc = exc
                 logger.warning("Stream attempt %d failed: %s", attempt + 1, exc)
@@ -230,6 +243,14 @@ class OllamaClient:
                 exc,
                 body,
             )
+            if 400 <= resp.status_code < 500:
+                # Auth/permission/payload problems never heal on retry: fail
+                # fast with an actionable message instead of masking them as
+                # "unreachable".
+                raise AIModelUnavailableError(
+                    f"Ollama Cloud rejected the request (HTTP {resp.status_code}). "
+                    "Check OLLAMA_CLOUD_API_KEY and model access."
+                ) from exc
             raise ConnectionError(f"Ollama Cloud HTTP {resp.status_code}: {exc}") from exc
 
         data = resp.json()
@@ -282,6 +303,15 @@ class OllamaClient:
             elapsed = time.time() - t0
             logger.error("Ollama stream connection failed after %.1fs: %s", elapsed, exc)
             raise ConnectionError(f"Ollama Cloud unreachable: {exc}") from exc
+        except requests.HTTPError as exc:
+            status = resp.status_code
+            logger.error("Ollama stream HTTP %d after %.1fs", status, time.time() - t0)
+            if 400 <= status < 500:
+                raise AIModelUnavailableError(
+                    f"Ollama Cloud rejected the stream request (HTTP {status}). "
+                    "Check OLLAMA_CLOUD_API_KEY and model access."
+                ) from exc
+            raise ConnectionError(f"Ollama Cloud HTTP {status}: {exc}") from exc
 
         token_count = 0
         first_token_at: float | None = None

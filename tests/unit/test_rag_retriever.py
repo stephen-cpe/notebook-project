@@ -134,30 +134,6 @@ class TestRetrieveWithSources:
 
 
 # ---------------------------------------------------------------------------
-# retrieve (joined text)
-# ---------------------------------------------------------------------------
-
-
-class TestRetrieve:
-    def test_returns_joined_text(self, app: object, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CI", "true")
-        monkeypatch.setenv("AI_MOCK", "true")
-        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
-        hashes, _ = _ingest_two_sources(app)
-        retriever = RAGRetriever()
-
-        text = retriever.retrieve(hashes, "databases", top_k=3)
-        assert isinstance(text, str)
-        assert len(text) > 0
-
-    def test_empty_sources_returns_empty_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CI", "true")
-        monkeypatch.setenv("AI_MOCK", "true")
-        retriever = RAGRetriever()
-        assert retriever.retrieve([], "query", top_k=5) == ""
-
-
-# ---------------------------------------------------------------------------
 # Corruption recovery
 # ---------------------------------------------------------------------------
 

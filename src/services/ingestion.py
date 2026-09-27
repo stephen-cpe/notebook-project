@@ -30,7 +30,7 @@ from src.services.document_parser import (
     extract_pptx_images,
     extract_text,
     extract_units,
-    parse_pdf_with_pages,
+    parse_pdf_document,
 )
 from src.services.ocr_service import OCR_PROMPT_TEXT, get_ocr_service
 from src.services.vector_store import get_vector_store
@@ -201,7 +201,9 @@ class IngestionService:
 
         # 3. Detect type + extract text.
         content_type = detect_content_type(filename)
-        text, page_count, ocr_used = self._extract_with_ocr_fallback(file_path, content_type)
+        text, page_count, ocr_used, prebuilt_units = self._extract_with_ocr_fallback(
+            file_path, content_type
+        )
 
         if not text.strip():
             return IngestionResult(
@@ -217,7 +219,9 @@ class IngestionService:
         # 4. Chunk per location-aware unit + embed + store. Page numbers
         # come from real document locations (PDF pages / PPTX slides) or
         # None for pageless content — never the chunk index.
-        chunked = chunk_units(self._build_units(file_path, content_type, text, ocr_used))
+        chunked = chunk_units(
+            self._build_units(file_path, content_type, text, ocr_used, prebuilt_units)
+        )
         if not chunked:
             return IngestionResult(
                 content_hash=content_hash,
@@ -283,8 +287,15 @@ class IngestionService:
 
     def _extract_with_ocr_fallback(
         self, file_path: str, content_type: str
-    ) -> tuple[str, int | None, bool]:
+    ) -> tuple[str, int | None, bool, list[tuple[str, int | None]] | None]:
         """Extract text; fall back to OCR if below threshold and enabled.
+
+        Returns ``(text, page_count, ocr_used, prebuilt_units)`` where
+        ``prebuilt_units`` carries location-aware ``(text, page)`` units from
+        the same single read whenever the returned text is the natively
+        parsed text (PDF/DOCX/TXT/MD) — ``None`` when OCR replaced the text
+        or the type needs a fresh unit pass (PPTX). Reusing the read avoids
+        parsing the file a second and third time in ``_build_units``.
 
         OCR is dispatched by content type:
         - PDF: rendered to images via Poppler (``ocr_pdf``).
@@ -299,41 +310,61 @@ class IngestionService:
         threshold = self._config.ocr_text_threshold
         ocr_used = False
 
-        text = extract_text(file_path, content_type)
-        page_count: int | None = None
+        prebuilt_units: list[tuple[str, int | None]] | None = None
         if content_type == "pdf":
-            _, page_count = parse_pdf_with_pages(file_path)
+            # One PdfReader traversal for text + units + page count.
+            text, pdf_units, page_count = parse_pdf_document(file_path)
+            prebuilt_units = [(u.text, u.page) for u in pdf_units]
+        else:
+            text = extract_text(file_path, content_type)
+            page_count = None
+            if content_type in ("docx", "txt", "md"):
+                # extract_units() for these types trivially wraps the same
+                # parsed text in one pageless unit — reuse it directly.
+                prebuilt_units = [(text, None)]
 
         if len(text.strip()) >= threshold:
-            return text, page_count, False
+            return text, page_count, False, prebuilt_units
 
         # OCR fallback — only when enabled and the type has images to OCR.
         if not self._ocr.is_available():
-            return text, page_count, False
+            return text, page_count, False, prebuilt_units
 
         ocr_text = self._run_ocr_fallback(file_path, content_type)
         if ocr_text is None:
             # OCR was not applicable for this type (e.g. TXT/MD, or DOCX/PPTX
             # with no embedded images). Keep any extracted text as-is.
-            return text, page_count, False
+            return text, page_count, False, prebuilt_units
         if ocr_text.strip():
             text = ocr_text
             ocr_used = True
+            prebuilt_units = None
 
-        return text, page_count, ocr_used
+        return text, page_count, ocr_used, prebuilt_units
 
     def _build_units(
-        self, file_path: str, content_type: str, text: str, ocr_used: bool
+        self,
+        file_path: str,
+        content_type: str,
+        text: str,
+        ocr_used: bool,
+        prebuilt_units: list[tuple[str, int | None]] | None = None,
     ) -> list[tuple[str, int | None]]:
         """Build ``(text, page)`` units for chunking with true locations.
 
         PDF pages and PPTX slides keep their real 1-based numbers; other
         content yields ``page=None``. When PDF OCR replaced near-empty
         native text, units are re-split from the OCR output's ``[Page N]``
-        markers (see ``ocr_service.ocr_pdf``).
+        markers (see ``ocr_service.ocr_pdf``). ``prebuilt_units`` (from the
+        extraction read) skips a redundant re-parse when provided.
         """
         if content_type == "pdf" and ocr_used:
             return _split_ocr_pages(text) or ([(text, None)] if text.strip() else [])
+        if prebuilt_units is not None:
+            nonempty = [
+                (unit_text, page) for unit_text, page in prebuilt_units if unit_text.strip()
+            ]
+            return nonempty or ([(text, None)] if text.strip() else [])
         try:
             units, _ = extract_units(file_path, content_type)
         except Exception as exc:  # noqa: BLE001

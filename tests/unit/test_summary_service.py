@@ -29,6 +29,7 @@ from src.services.auth_service import hash_password
 from src.services.summary_service import (
     SummaryService,
     compute_content_signature,
+    parse_suggested_questions,
     parse_summary_response,
 )
 
@@ -285,3 +286,50 @@ class TestSummaryResult:
         assert r.summary == "test"
         assert r.suggested_questions == ["q1"]
         assert r.skipped is False
+
+
+# ---------------------------------------------------------------------------
+# parse_suggested_questions
+# ---------------------------------------------------------------------------
+
+
+class TestParseSuggestedQuestions:
+    def test_valid_json(self) -> None:
+        assert parse_suggested_questions('["q1", "q2"]') == ["q1", "q2"]
+
+    def test_none_and_empty(self) -> None:
+        assert parse_suggested_questions(None) == []
+        assert parse_suggested_questions("") == []
+
+    def test_corrupt_json_returns_empty(self) -> None:
+        assert parse_suggested_questions("{not json") == []
+        assert parse_suggested_questions("just a string") == []
+
+    def test_non_list_json_returns_empty(self) -> None:
+        assert parse_suggested_questions('{"q": 1}') == []
+
+    def test_skip_path_tolerates_corrupt_questions(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Idempotency skip must not 500 on a corrupt stored value."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        _, nb_id = _make_user_and_notebook(app, "sumcorrupt")
+        _add_source(app, nb_id, "doc.txt", "e" * 64)
+
+        svc = SummaryService()
+        with app.app_context():
+            nb = notebook_repo.get_by_id(nb_id)
+            assert nb is not None
+            sig = compute_content_signature(["e" * 64])
+            nb.summary = "Existing summary."
+            nb.suggested_questions = "{corrupt"
+            nb.content_signature = sig
+            db.session.commit()
+
+            result = svc.generate_summary(nb)
+            assert result is not None
+            assert result.skipped is True
+            assert result.summary == "Existing summary."
+            assert result.suggested_questions == []

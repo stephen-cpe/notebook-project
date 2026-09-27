@@ -69,6 +69,23 @@ class TestGetSummary:
         res = client.get(f"/notebooks/{nb_id}/summary")
         assert res.status_code == 404
 
+    def test_corrupt_questions_returns_empty_list(
+        self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Corrupt stored JSON must not 500 the summary endpoint."""
+        nb_id = _create_notebook_with_source(client, app, monkeypatch, "sumroute5")
+        with app.app_context():
+            nb = db.session.query(Notebook).filter_by(id=nb_id).first()
+            assert nb is not None
+            nb.summary = "Existing summary."
+            nb.suggested_questions = "{corrupt"
+            db.session.commit()
+        res = client.get(f"/notebooks/{nb_id}/summary")
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["summary"] == "Existing summary."
+        assert data["suggested_questions"] == []
+
 
 class TestRegenerateSummary:
     def test_regenerates(

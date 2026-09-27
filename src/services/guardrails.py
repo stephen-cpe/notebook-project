@@ -176,20 +176,34 @@ GREETING_PATTERNS: list[str] = [
 
 
 def _extract_meaningful_words(text: str) -> set[str]:
-    """Extract lowercase words >= 3 chars, excluding stopwords."""
+    """Extract lowercase words >= 3 letters, excluding stopwords.
+
+    Unicode-aware: non-Latin scripts are tokenized like Latin text instead
+    of being silently dropped (the previous ``[a-zA-Z]`` pattern refused
+    every non-English question as out-of-scope).
+    """
     if not text:
         return set()
-    words = re.findall(r"[a-zA-Z]{3,}", text.lower())
+    words = re.findall(r"[^\W\d_]{3,}", text.lower())
     return {w for w in words if w not in STOPWORDS}
+
+
+# Upper bound on how much source text the scope check scans per question.
+# Full-text scans on every chat turn get expensive for large notebooks, and
+# topical keywords concentrate at the head of each source, so the check
+# samples a bounded prefix instead of re-reading megabytes per turn.
+_MAX_SCOPE_SOURCES = 20
+_MAX_SCOPE_CHARS_PER_SOURCE = 4000
+_MAX_SCOPE_TOTAL_CHARS = 40000
 
 
 def is_in_scope(question: str, source_texts: list[str]) -> bool:
     """Determine if a question is related to the notebook's sources.
 
     Uses a keyword-overlap heuristic: extract meaningful words from both the
-    question and the combined source text, then check if any question words
-    appear in the sources. Greetings and off-topic indicators short-circuit
-    to False.
+    question and a bounded sample of the source text, then check if any
+    question words appear in the sources. Greetings and off-topic indicators
+    short-circuit to False.
 
     Returns:
         True if the question appears related to the source content.
@@ -216,9 +230,11 @@ def is_in_scope(question: str, source_texts: list[str]) -> bool:
     if not q_meaningful:
         return False
 
-    # Extract meaningful words from all source texts combined.
-    combined_sources = " ".join(source_texts)
-    source_words = _extract_meaningful_words(combined_sources)
+    # Extract meaningful words from a bounded sample of the sources.
+    sampled = " ".join(
+        text[:_MAX_SCOPE_CHARS_PER_SOURCE] for text in source_texts[:_MAX_SCOPE_SOURCES]
+    )
+    source_words = _extract_meaningful_words(sampled[:_MAX_SCOPE_TOTAL_CHARS])
     if not source_words:
         return False
 
@@ -269,9 +285,3 @@ def check_groundedness(answer: str, context: str, threshold: float = 0.5) -> tup
         "provided sources. Please verify independently.*"
     )
     return False, answer + disclaimer
-
-
-def maybe_append_disclaimer(answer: str, context: str) -> str:
-    """Convenience: run ``check_groundedness`` and return only the result text."""
-    _, result = check_groundedness(answer, context)
-    return result

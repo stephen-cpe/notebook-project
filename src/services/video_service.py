@@ -23,19 +23,19 @@ from PIL import Image, ImageDraw, ImageFont
 
 from src.config import Config
 from src.extensions import db
-from src.models import Notebook
+from src.models import (
+    VIDEO_STATUS_FAILED,
+    VIDEO_STATUS_NONE,
+    VIDEO_STATUS_READY,
+    VIDEO_STATUS_SCRIPTING,
+    VIDEO_STATUS_SYNTHESIZING,
+    Notebook,
+)
 from src.repositories import notebook_repo
 from src.services.tts_utils import speaker_to_voice, synthesize_utterance
 from src.services.video_scripter import VideoScripter
 
 logger = logging.getLogger(__name__)
-
-VIDEO_STATUS_NONE = "none"
-VIDEO_STATUS_QUEUED = "queued"
-VIDEO_STATUS_SCRIPTING = "scripting"
-VIDEO_STATUS_SYNTHESIZING = "synthesizing"
-VIDEO_STATUS_READY = "ready"
-VIDEO_STATUS_FAILED = "failed"
 
 SLIDE_WIDTH = 1280
 SLIDE_HEIGHT = 720
@@ -180,7 +180,7 @@ class VideoService:
                     error="All narrations failed to synthesize.",
                 )
 
-            self._combine_to_mp4(slide_files, audio_files, output_path)
+            self._combine_to_mp4(slide_files, audio_files, output_path, scratch_dir=str(temp_dir))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -260,7 +260,11 @@ class VideoService:
         return synthesize_utterance(text, voice, output_path, mock=self._mock)
 
     def _combine_to_mp4(
-        self, slide_files: list[str], audio_files: list[str], output_path: str
+        self,
+        slide_files: list[str],
+        audio_files: list[str],
+        output_path: str,
+        scratch_dir: str | None = None,
     ) -> None:
         """Combine slides + narration into one MP4 with an aligned timeline.
 
@@ -270,8 +274,16 @@ class VideoService:
         durations, so narration never drifts to the wrong slide and the final
         video is never truncated mid-sentence. ``-shortest`` remains only as
         a guard against rounding differences.
+
+        ``scratch_dir`` holds the ffmpeg concat manifests and generated
+        silence files. It must be job-isolated (e.g. the job's ``tmp_<jid>``
+        dir): these files used to live next to ``output_path`` under
+        content-derived names, so two overlapping jobs for one notebook
+        overwrote and deleted each other's manifests mid-run. Callers that
+        omit it keep the legacy layout (single-job use, e.g. tests).
         """
-        work_dir = Path(output_path).parent
+        output = Path(output_path)
+        scratch = Path(scratch_dir) if scratch_dir else output.parent
         durations: list[float] = []
         for i in range(len(slide_files)):
             audio = audio_files[i] if i < len(audio_files) else ""
@@ -280,7 +292,7 @@ class VideoService:
             else:
                 durations.append(DEFAULT_SLIDE_SECONDS)
 
-        concat_file = str(Path(output_path).with_suffix(".txt"))
+        concat_file = str(scratch / (output.stem + ".txt"))
         lines: list[str] = []
         for i, img in enumerate(slide_files):
             abs_img = str(Path(img).resolve())
@@ -296,7 +308,7 @@ class VideoService:
 
         try:
             if audio_present:
-                pad_file = str(work_dir / "silence_pad.mp3")
+                pad_file = str(scratch / "silence_pad.mp3")
                 self._make_silence(SLIDE_TAIL_SECONDS, pad_file)
                 generated_silences.append(pad_file)
                 track: list[str] = []
@@ -305,11 +317,11 @@ class VideoService:
                     if audio and Path(audio).exists():
                         track += [audio, pad_file]
                     else:
-                        sil = str(work_dir / f"silence_slide_{i:04d}.mp3")
+                        sil = str(scratch / f"silence_slide_{i:04d}.mp3")
                         self._make_silence(durations[i], sil)
                         generated_silences.append(sil)
                         track.append(sil)
-                audio_concat = str(Path(output_path).with_suffix(".audio.txt"))
+                audio_concat = str(scratch / (output.stem + ".audio.txt"))
                 audio_lines = [f"file '{str(Path(a).resolve())}'" for a in track]
                 Path(audio_concat).write_text("\n".join(audio_lines), encoding="utf-8")
 
@@ -456,7 +468,7 @@ class VideoService:
             db.session.refresh(notebook)
         except Exception:  # noqa: BLE001
             return True
-        return notebook.video_generation != generation or notebook.video_status == "none"
+        return notebook.video_generation != generation or notebook.video_status == VIDEO_STATUS_NONE
 
 
 def generate_video_for_notebook(

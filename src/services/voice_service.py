@@ -89,6 +89,8 @@ class VoiceService:
             )
         except (AudioTooLongError, SpeechToTextError) as exc:
             logger.warning("voice turn STT failed: %s", exc)
+            # Stable, opaque code for clients; details stay server-side.
+            code = "audio_too_long" if isinstance(exc, AudioTooLongError) else "stt_failed"
             return VoiceTurnResult(
                 transcript="",
                 answer="",
@@ -96,7 +98,7 @@ class VoiceService:
                 reply_audio_path=None,
                 reply_audio_url=None,
                 latency_ms=int((time.time() - start) * 1000),
-                error=str(exc),
+                error=code,
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception("voice turn STT unexpected error: %s", exc)
@@ -107,7 +109,7 @@ class VoiceService:
                 reply_audio_path=None,
                 reply_audio_url=None,
                 latency_ms=int((time.time() - start) * 1000),
-                error=str(exc),
+                error="stt_failed",
             )
 
         # 2. Empty transcript -> no LLM call.
@@ -136,7 +138,7 @@ class VoiceService:
                 reply_audio_path=None,
                 reply_audio_url=None,
                 latency_ms=int((time.time() - start) * 1000),
-                error=f"chat_failed: {exc}",
+                error="chat_failed",
             )
 
         # 4. TTS — synthesize the answer.
@@ -161,7 +163,7 @@ class VoiceService:
             except Exception as exc:  # noqa: BLE001
                 logger.exception("voice turn TTS failed: %s", exc)
                 reply_path = None
-                error = f"tts_failed: {exc}"
+                error = "tts_failed"
 
         return VoiceTurnResult(
             transcript=transcript,

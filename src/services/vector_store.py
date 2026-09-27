@@ -269,11 +269,6 @@ class VectorStore:
     # Retrieve
     # ------------------------------------------------------------------
 
-    def retrieve(self, content_hash: str, query: str, top_k: int = 5) -> str:
-        """Basic similarity search; return joined text of top results."""
-        results = self.retrieve_with_scores(content_hash, query, top_k)
-        return "\n\n".join(r["document"] for r in results)
-
     def retrieve_with_scores(
         self,
         content_hash: str,
@@ -305,46 +300,6 @@ class VectorStore:
             (time.time() - t0) * 1000,
         )
         return results
-
-    def retrieve_from_multiple_collections(
-        self,
-        content_hashes: list[str],
-        query: str,
-        top_k: int = 5,
-    ) -> str:
-        """Query multiple collections, merge, return joined text of top results."""
-        results = self.retrieve_from_multiple_collections_with_sources(content_hashes, query, top_k)
-        return "\n\n".join(r["text"] for r in results)
-
-    def retrieve_from_multiple_collections_with_sources(
-        self,
-        content_hashes: list[str],
-        query: str,
-        top_k: int = 5,
-    ) -> list[dict[str, Any]]:
-        """Query multiple collections, merge by score, return top_k with provenance.
-
-        Each result: ``{text, filename, page, chunk_index, score}``.
-        """
-        if not content_hashes:
-            return []
-        all_results: list[dict[str, Any]] = []
-        per_collection_k = 3
-        for h in content_hashes:
-            partial = self.retrieve_with_scores(h, query, top_k=per_collection_k)
-            for r in partial:
-                md = r.get("metadata", {}) or {}
-                all_results.append(
-                    {
-                        "text": r["document"],
-                        "filename": md.get("filename", ""),
-                        "page": md.get("page"),
-                        "chunk_index": md.get("chunk_index"),
-                        "score": r["score"],
-                    }
-                )
-        all_results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
-        return all_results[:top_k]
 
     # ------------------------------------------------------------------
     # Corruption recovery

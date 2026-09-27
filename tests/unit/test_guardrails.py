@@ -19,7 +19,6 @@ Covers:
   disclaimer appended.
 - check_groundedness: empty answer -> True (vacuously).
 - check_groundedness: empty context -> False, disclaimer appended.
-- apply_guardrails: composes both; returns (answer, refused, sources_note).
 """
 
 from __future__ import annotations
@@ -27,7 +26,6 @@ from __future__ import annotations
 from src.services.guardrails import (
     check_groundedness,
     is_in_scope,
-    maybe_append_disclaimer,
 )
 
 # ---------------------------------------------------------------------------
@@ -78,6 +76,14 @@ class TestIsInScope:
     def test_greeting_is_out_of_scope(self) -> None:
         sources = ["Document about databases."]
         assert is_in_scope("Hello, how are you?", sources) is False
+
+    def test_non_latin_question_in_scope(self) -> None:
+        sources = ["Die Steuererklärung muss bis Juli eingereicht werden."]
+        assert is_in_scope("Wann ist die Steuererklärung fällig?", sources) is True
+
+    def test_large_corpus_uses_bounded_sample(self) -> None:
+        sources = ["Datenbank SQL PostgreSQL " + ("x" * 5000)] * 25
+        assert is_in_scope("Welche Datenbank wird erwähnt?", sources) is True
 
 
 # ---------------------------------------------------------------------------
@@ -144,23 +150,3 @@ class TestCheckGroundedness:
         _, result = check_groundedness(answer, context)
         assert answer == original
         assert result != answer  # disclaimer was appended
-
-
-# ---------------------------------------------------------------------------
-# maybe_append_disclaimer
-# ---------------------------------------------------------------------------
-
-
-class TestMaybeAppendDisclaimer:
-    def test_grounded_no_disclaimer(self) -> None:
-        context = "The sky is blue."
-        answer = "The sky is blue."
-        result = maybe_append_disclaimer(answer, context)
-        assert result == answer
-
-    def test_ungrounded_appends_disclaimer(self) -> None:
-        context = "The sky is blue."
-        answer = "Quantum entanglement is a physics phenomenon."
-        result = maybe_append_disclaimer(answer, context)
-        assert answer in result
-        assert len(result) > len(answer)

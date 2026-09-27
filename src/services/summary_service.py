@@ -83,6 +83,24 @@ def parse_summary_response(raw: str) -> tuple[str, list[str]]:
         return raw, []
 
 
+def parse_suggested_questions(raw: str | None) -> list[str]:
+    """Parse stored ``suggested_questions`` JSON into a question list.
+
+    Returns ``[]`` when the value is missing, corrupt, or not a list so a
+    single bad row can never turn a read-only summary view into a 500.
+    """
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Stored suggested_questions is not valid JSON; returning []")
+        return []
+    if not isinstance(data, list):
+        return []
+    return [str(q) for q in data]
+
+
 class SummaryService:
     """Generates + persists notebook summaries with idempotency."""
 
@@ -107,9 +125,7 @@ class SummaryService:
             logger.info("Summary skipped (signature unchanged) for notebook %d", notebook.id)
             return SummaryResult(
                 summary=notebook.summary,
-                suggested_questions=json.loads(notebook.suggested_questions)
-                if notebook.suggested_questions
-                else [],
+                suggested_questions=parse_suggested_questions(notebook.suggested_questions),
                 skipped=True,
             )
 

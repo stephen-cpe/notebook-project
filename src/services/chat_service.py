@@ -216,45 +216,74 @@ class ChatService:
             self._config.enable_thinking,
         )
 
+        # Persist the user turn up-front: if the client disconnects
+        # mid-stream, the question itself is never lost from history.
+        chat_repo.create_message(notebook.id, "user", question)
+
         full_answer_parts: list[str] = []
-        for token in self._client.stream(messages):
-            full_answer_parts.append(token)
-            yield self._sse_frame({"token": token})
+        assistant_persisted = False
+        try:
+            for token in self._client.stream(messages):
+                full_answer_parts.append(token)
+                yield self._sse_frame({"token": token})
 
-        raw_answer = "".join(full_answer_parts)
-        logger.info(
-            "  [3/4] Stream complete: %d tokens, %d chars (%.0fms)",
-            len(full_answer_parts),
-            len(raw_answer),
-            (time.time() - t0) * 1000,
-        )
+            raw_answer = "".join(full_answer_parts)
+            logger.info(
+                "  [3/4] Stream complete: %d tokens, %d chars (%.0fms)",
+                len(full_answer_parts),
+                len(raw_answer),
+                (time.time() - t0) * 1000,
+            )
 
-        # 4. Groundedness check.
-        t0 = time.time()
-        _, answer = check_groundedness(raw_answer, context)
-        logger.info(
-            "  [4/4] Groundedness: %s (%.0fms)",
-            "grounded" if answer == raw_answer else "UNGROUNDED",
-            (time.time() - t0) * 1000,
-        )
-        # If disclaimer was appended, send it as a final token.
-        if answer != raw_answer:
-            disclaimer = answer[len(raw_answer) :]
-            yield self._sse_frame({"token": disclaimer})
+            # 4. Groundedness check.
+            t0 = time.time()
+            _, answer = check_groundedness(raw_answer, context)
+            logger.info(
+                "  [4/4] Groundedness: %s (%.0fms)",
+                "grounded" if answer == raw_answer else "UNGROUNDED",
+                (time.time() - t0) * 1000,
+            )
+            # If disclaimer was appended, send it as a final token.
+            if answer != raw_answer:
+                disclaimer = answer[len(raw_answer) :]
+                yield self._sse_frame({"token": disclaimer})
 
-        # 5. Persist.
-        latency = int((time.time() - start) * 1000)
-        self._persist(notebook.id, question, answer, sources, latency)
+            # 5. Persist.
+            latency = int((time.time() - start) * 1000)
+            chat_repo.create_message(
+                notebook.id,
+                "assistant",
+                answer,
+                sources_json=json.dumps(sources) if sources else None,
+                latency_ms=latency,
+            )
+            assistant_persisted = True
 
-        # 6. Final frame.
-        yield self._sse_frame({"sources": sources, "latency_ms": latency, "done": True})
-        logger.info(
-            "=== Chat stream done: notebook=%d latency=%dms sources=%d answer=%dchars",
-            notebook.id,
-            latency,
-            len(sources),
-            len(answer),
-        )
+            # 6. Final frame.
+            yield self._sse_frame({"sources": sources, "latency_ms": latency, "done": True})
+            logger.info(
+                "=== Chat stream done: notebook=%d latency=%dms sources=%d answer=%dchars",
+                notebook.id,
+                latency,
+                len(sources),
+                len(answer),
+            )
+        finally:
+            if not assistant_persisted:
+                # The client disconnected (or streaming failed) after the
+                # user turn was saved: keep whatever partial answer had
+                # streamed so the turn is not silently lost from history.
+                try:
+                    latency = int((time.time() - start) * 1000)
+                    chat_repo.create_message(
+                        notebook.id,
+                        "assistant",
+                        "".join(full_answer_parts),
+                        sources_json=json.dumps(sources) if sources else None,
+                        latency_ms=latency,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("Could not persist partial chat turn")
 
     # ------------------------------------------------------------------
     # Helpers
@@ -282,14 +311,8 @@ class ChatService:
         return {s.content_hash: s.filename for s in sources}
 
     def _get_source_texts(self, notebook_id: int) -> list[str]:
-        """Return cached extracted texts for scope checking."""
-        hashes = self._get_source_hashes(notebook_id)
-        texts: list[str] = []
-        for h in hashes:
-            entry = content_registry_repo.get_by_hash(h)
-            if entry and entry.extracted_text:
-                texts.append(entry.extracted_text)
-        return texts
+        """Return cached extracted texts for scope checking (one query)."""
+        return content_registry_repo.get_texts_by_hashes(self._get_source_hashes(notebook_id))
 
     def _persist(
         self,

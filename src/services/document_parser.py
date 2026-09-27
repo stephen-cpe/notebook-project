@@ -76,26 +76,14 @@ def extract_text(path: str, content_type: str) -> str:
 
 def parse_pdf(path: str) -> str:
     """Extract text from a PDF using pypdf (multi-page)."""
-    from pypdf import PdfReader
-
-    reader = PdfReader(path)
-    parts: list[str] = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        parts.append(text)
-    return "\n\n".join(parts)
+    text, _, _ = parse_pdf_document(path)
+    return text
 
 
 def parse_pdf_with_pages(path: str) -> tuple[str, int]:
     """Like ``parse_pdf`` but also returns the page count."""
-    from pypdf import PdfReader
-
-    reader = PdfReader(path)
-    parts: list[str] = []
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        parts.append(text)
-    return "\n\n".join(parts), len(reader.pages)
+    text, _, page_count = parse_pdf_document(path)
+    return text, page_count
 
 
 def parse_pdf_pages(path: str) -> list[tuple[int, str]]:
@@ -105,15 +93,33 @@ def parse_pdf_pages(path: str) -> list[tuple[int, str]]:
     so chunks built from these units cite correct pages. Empty pages
     are skipped (their numbers are simply absent from the result).
     """
+    _, units, _ = parse_pdf_document(path)
+    return [(unit.page, unit.text) for unit in units if unit.page is not None]
+
+
+def parse_pdf_document(path: str) -> tuple[str, list[TextUnit], int]:
+    """Read a PDF once: full text, location-aware units, and page count.
+
+    This is the single-read primitive behind ``parse_pdf``,
+    ``parse_pdf_with_pages``, ``parse_pdf_pages``, and the PDF branch of
+    ``extract_units`` — all four return byte-identical results to a
+    dedicated pass, so callers needing several views (e.g. ingestion)
+    pay for exactly one ``PdfReader`` traversal instead of three.
+
+    ``text`` joins *all* pages (empties kept) exactly like ``parse_pdf``;
+    ``units`` skips empty pages exactly like ``extract_units``.
+    """
     from pypdf import PdfReader
 
     reader = PdfReader(path)
-    pages: list[tuple[int, str]] = []
-    for n, page in enumerate(reader.pages, start=1):
-        text = page.extract_text() or ""
-        if text.strip():
-            pages.append((n, text))
-    return pages
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    text = "\n\n".join(page_texts)
+    units = [
+        TextUnit(text=page_text, page=page_no)
+        for page_no, page_text in enumerate(page_texts, start=1)
+        if page_text.strip()
+    ]
+    return text, units, len(reader.pages)
 
 
 @dataclass
@@ -140,15 +146,8 @@ def extract_units(path: str, content_type: str) -> tuple[list[TextUnit], int | N
     if not p.exists():
         raise IngestionError(f"File not found: {path}")
     if content_type == "pdf":
-        from pypdf import PdfReader
-
-        reader = PdfReader(path)
-        units: list[TextUnit] = []
-        for n, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            if text.strip():
-                units.append(TextUnit(text=text, page=n))
-        return units, len(reader.pages)
+        _, units, page_count = parse_pdf_document(path)
+        return units, page_count
     if content_type == "pptx":
         from pptx import Presentation
 

@@ -45,9 +45,6 @@ class TestConfigDefaults:
         assert cfg.embedding_provider == "local"
         assert cfg.hf_inference_endpoint == ""
         assert cfg.enable_thinking is True
-        assert cfg.audio_voice_a == "en-US-AvaNeural"
-        assert cfg.audio_voice_b == "en-US-AndrewNeural"
-        assert cfg.audio_format == "mp3"
         assert cfg.max_sources_per_notebook == 50
         assert cfg.max_file_size_mb == 25
         assert cfg.chroma_db == "local"

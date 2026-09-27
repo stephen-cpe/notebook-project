@@ -6,6 +6,7 @@ from typing import Any
 
 from flask import Blueprint, Response, flash, jsonify, redirect, render_template, url_for
 from flask_login import login_required
+from sqlalchemy import func
 
 from src.extensions import db
 from src.models import Notebook, Source
@@ -21,10 +22,24 @@ admin_bp = Blueprint("admin", __name__, url_prefix="/admin")
 def dashboard() -> str:
     """Admin dashboard — list users with notebook/source counts."""
     users = user_repo.list_all()
+    # Aggregate counts in two queries instead of two per user (N+1).
+    nb_counts: dict[int, int] = {
+        row[0]: row[1]
+        for row in db.session.query(Notebook.user_id, func.count(Notebook.id))
+        .group_by(Notebook.user_id)
+        .all()
+    }
+    src_counts: dict[int, int] = {
+        row[0]: row[1]
+        for row in db.session.query(Notebook.user_id, func.count(Source.id))
+        .join(Source, Source.notebook_id == Notebook.id)
+        .group_by(Notebook.user_id)
+        .all()
+    }
     user_data: list[dict[str, Any]] = []
     for u in users:
-        nb_count = db.session.query(Notebook).filter_by(user_id=u.id).count()
-        src_count = db.session.query(Source).join(Notebook).filter(Notebook.user_id == u.id).count()
+        nb_count = nb_counts.get(u.id, 0)
+        src_count = src_counts.get(u.id, 0)
         user_data.append(
             {
                 "id": u.id,

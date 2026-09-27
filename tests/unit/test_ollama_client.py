@@ -381,6 +381,34 @@ class TestRealChat:
             client.chat([{"role": "user", "content": "hi"}])
         assert "HTTP 500" in str(excinfo.value)
 
+    def test_timeout_is_not_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A timeout must fail fast instead of doubling worst-case latency."""
+        client = _real_client(monkeypatch)
+        from requests import Timeout
+
+        with (
+            patch(
+                "src.services.ollama_client.requests.post", side_effect=Timeout("t")
+            ) as mock_post,
+            pytest.raises(Exception) as excinfo,
+        ):
+            client.chat([{"role": "user", "content": "hi"}])
+        assert "timed out" in str(excinfo.value)
+        assert mock_post.call_count == 1
+
+    def test_4xx_is_not_retried_and_names_the_cause(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Auth errors must surface immediately, not as 'unreachable'."""
+        client = _real_client(monkeypatch)
+        resp = _FakeResp(status_code=401, text="unauthorized")
+        with (
+            patch("src.services.ollama_client.requests.post", return_value=resp) as mock_post,
+            pytest.raises(Exception) as excinfo,
+        ):
+            client.chat([{"role": "user", "content": "hi"}])
+        assert "401" in str(excinfo.value)
+        assert "OLLAMA_CLOUD_API_KEY" in str(excinfo.value)
+        assert mock_post.call_count == 1
+
     def test_retries_after_connection_error_then_succeeds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -6,6 +6,8 @@ cached extracted text, enabling cross-user dedup and corruption recovery.
 
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from src.extensions import db
 from src.models import ContentRegistry
 
@@ -33,6 +35,22 @@ def create_entry(
 def get_by_hash(content_hash: str) -> ContentRegistry | None:
     """Fetch a registry entry by content hash (PK)."""
     return db.session.get(ContentRegistry, content_hash)
+
+
+def get_texts_by_hashes(content_hashes: list[str]) -> list[str]:
+    """Return extracted texts for ``content_hashes`` in a single query.
+
+    Used by per-request paths (e.g. the chat scope check) so a notebook with
+    many sources costs one query instead of one per source.
+    """
+    if not content_hashes:
+        return []
+    rows = db.session.scalars(
+        select(ContentRegistry.extracted_text).where(
+            ContentRegistry.content_hash.in_(content_hashes)
+        )
+    ).all()
+    return [text for text in rows if text]
 
 
 def update_fingerprint(

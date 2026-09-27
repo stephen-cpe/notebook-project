@@ -21,19 +21,19 @@ from pathlib import Path
 
 from src.config import Config
 from src.extensions import db
-from src.models import Notebook
+from src.models import (
+    AUDIO_STATUS_FAILED,
+    AUDIO_STATUS_NONE,
+    AUDIO_STATUS_READY,
+    AUDIO_STATUS_SCRIPTING,
+    AUDIO_STATUS_SYNTHESIZING,
+    Notebook,
+)
 from src.repositories import notebook_repo
 from src.services.audio_scripter import write_dialogue
 from src.services.tts_utils import speaker_to_voice, synthesize_utterance
 
 logger = logging.getLogger(__name__)
-
-AUDIO_STATUS_NONE = "none"
-AUDIO_STATUS_QUEUED = "queued"
-AUDIO_STATUS_SCRIPTING = "scripting"
-AUDIO_STATUS_SYNTHESIZING = "synthesizing"
-AUDIO_STATUS_READY = "ready"
-AUDIO_STATUS_FAILED = "failed"
 
 
 @dataclass
@@ -208,7 +208,7 @@ class AudioService:
             db.session.refresh(notebook)
         except Exception:  # noqa: BLE001
             return True
-        return notebook.audio_generation != generation or notebook.audio_status == "none"
+        return notebook.audio_generation != generation or notebook.audio_status == AUDIO_STATUS_NONE
 
 
 # ---------------------------------------------------------------------------

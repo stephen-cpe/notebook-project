@@ -54,6 +54,27 @@ class TestParsePdf:
         assert pages == 2
 
 
+class TestParsePdfDocument:
+    def test_matches_legacy_helpers(self) -> None:
+        """Single-read primitive must equal the dedicated passes exactly."""
+        from src.services.document_parser import (
+            extract_units,
+            parse_pdf,
+            parse_pdf_document,
+            parse_pdf_pages,
+            parse_pdf_with_pages,
+        )
+
+        path = str(FIXTURES / "sample.pdf")
+        text, units, count = parse_pdf_document(path)
+        assert text == parse_pdf(path)
+        assert (text, count) == parse_pdf_with_pages(path)
+        assert [(u.page, u.text) for u in units] == parse_pdf_pages(path)
+        legacy_units, legacy_count = extract_units(path, "pdf")
+        assert units == legacy_units
+        assert count == legacy_count
+
+
 class TestParseDocx:
     def test_extracts_text(self) -> None:
         text = parse_docx(str(FIXTURES / "sample.docx"))

@@ -134,3 +134,44 @@ class TestChatStream:
             last = json.loads(frames[-1].replace("data: ", ""))
             assert last.get("done") is True
             assert "latency_ms" in last
+
+    def test_full_stream_persists_two_messages(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        nb_id = _setup_notebook_with_source(app, "chatsvc6")
+
+        svc = ChatService()
+        with app.app_context():
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            list(svc.chat_stream(nb, "What databases are mentioned?"))
+            from src.models import ChatMessage
+
+            msgs = db.session.query(ChatMessage).filter_by(notebook_id=nb_id).all()
+            assert [m.role for m in msgs] == ["user", "assistant"]
+            assert len(msgs[1].content) > 0
+
+    def test_disconnect_mid_stream_keeps_partial_turn(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Closing the stream early must not lose the turn from history."""
+        monkeypatch.setenv("CI", "true")
+        monkeypatch.setenv("AI_MOCK", "true")
+        monkeypatch.setenv("OCR_FALLBACK_ENABLED", "false")
+        nb_id = _setup_notebook_with_source(app, "chatsvc7")
+
+        svc = ChatService()
+        with app.app_context():
+            nb = db.session.get(Notebook, nb_id)
+            assert nb is not None
+            gen = svc.chat_stream(nb, "What databases are mentioned?")
+            first = next(gen)
+            assert first.startswith("data: ")
+            gen.close()
+            from src.models import ChatMessage
+
+            msgs = db.session.query(ChatMessage).filter_by(notebook_id=nb_id).all()
+            assert [m.role for m in msgs] == ["user", "assistant"]

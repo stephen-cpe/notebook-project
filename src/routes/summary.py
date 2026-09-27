@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import json
-
 from flask import Blueprint, Response, jsonify
 from flask_login import login_required
 
 from src.extensions import db
 from src.routes._helpers import require_owner
-from src.services.summary_service import SummaryService
+from src.services.summary_service import SummaryService, parse_suggested_questions
 
 summary_bp = Blueprint("summary", __name__)
 
@@ -22,9 +20,7 @@ def get_summary(notebook_id: int) -> tuple[Response, int]:
     return (
         jsonify(
             summary=notebook.summary or "",
-            suggested_questions=json.loads(notebook.suggested_questions)
-            if notebook.suggested_questions
-            else [],
+            suggested_questions=parse_suggested_questions(notebook.suggested_questions),
         ),
         200,
     )

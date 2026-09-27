@@ -16,8 +16,8 @@ from flask_login import current_user, login_required
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from src.extensions import db
+from src.models import AUDIO_STATUS_NONE, AUDIO_STATUS_QUEUED
 from src.routes._helpers import require_owner
-from src.services.audio_service import AUDIO_STATUS_QUEUED
 from src.services.jobs import TRANSIENT_MEDIA_STATUSES, launch_audio_job
 
 audio_bp = Blueprint("audio", __name__)
@@ -102,7 +102,7 @@ def delete_audio(notebook_id: int) -> tuple[Response, int]:
             audio_path = Path.cwd() / audio_path
         audio_path.unlink(missing_ok=True)
     notebook.audio_path = None
-    notebook.audio_status = "none"
+    notebook.audio_status = AUDIO_STATUS_NONE
     notebook.audio_error = None
     notebook.audio_generation += 1
     db.session.commit()

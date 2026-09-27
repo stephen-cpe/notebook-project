@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Generator
 from typing import Any
 
@@ -22,6 +23,8 @@ from src.services.chat_service import ChatService
 chat_bp = Blueprint("chat", __name__)
 
 ViewReturn = Response | tuple[Any, int]
+
+logger = logging.getLogger(__name__)
 
 
 @chat_bp.post("/notebooks/<int:notebook_id>/chat")
@@ -44,12 +47,11 @@ def chat_stream(notebook_id: int) -> ViewReturn:
         try:
             yield from svc.chat_stream(notebook, question)
         except Exception as exc:
-            import json
-            import logging
-
-            logger = logging.getLogger(__name__)
+            # Never leak internals: details stay in the server log; the client
+            # gets a stable, opaque error frame (mirrors the 500 handler).
             logger.error("Chat stream error: %s", exc, exc_info=True)
-            yield f"data: {json.dumps({'error': str(exc), 'done': True})}\n\n"
+            payload = {"error": "Chat streaming failed. Please try again.", "done": True}
+            yield f"data: {json.dumps(payload)}\n\n"
 
     return Response(
         stream_with_context(generate()),

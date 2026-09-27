@@ -99,7 +99,7 @@ class TestRunVoiceTurn:
         with app.app_context():
             nb = db.session.get(Notebook, nb_id)
             result = svc.run_voice_turn(nb, str(tmp_path / "in.webm"), "Ava")
-        assert result.error == "too long"
+        assert result.error == "audio_too_long"
         chat.chat_sync.assert_not_called()
 
     def test_llm_failure_returns_transcript_and_error(

@@ -4,10 +4,8 @@ Covers:
 - Backend selection: CI -> EphemeralClient, CHROMA_DB=local -> PersistentClient.
 - Collection naming: content-keyed + embedding-versioned `doc_<hash[:50]>_<fp>`.
 - store_chunks with metadata (source_hash, filename, page, chunk_index).
-- retrieve (basic similarity search) returns joined text.
 - retrieve_with_scores returns score = 1 - distance.
-- retrieve_from_multiple_collections merges + sorts by score + truncates.
-- retrieve_from_multiple_collections_with_sources preserves provenance.
+- Multi-collection merge/sort/truncate lives in RAGRetriever (tested there).
 - Corruption recovery: broken collection is deleted + rebuilt.
 - Mock embeddings (offline, deterministic).
 """
@@ -211,9 +209,9 @@ class TestStoreAndRetrieve:
             for i in range(3)
         ]
         vs.store_chunks(content_hash, chunks, metadatas)
-        results = vs.retrieve(content_hash, "What color is the sky?", top_k=2)
-        assert isinstance(results, str)
-        assert len(results) > 0
+        results = vs.retrieve_with_scores(content_hash, "What color is the sky?", top_k=2)
+        assert len(results) == 2
+        assert all("document" in r and "score" in r for r in results)
 
     def test_store_with_metadata(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CI", "true")
@@ -269,94 +267,9 @@ class TestStoreAndRetrieve:
         monkeypatch.setenv("CI", "true")
         monkeypatch.setenv("AI_MOCK", "true")
         vs = VectorStore()
-        results = vs.retrieve(
+        results = vs.retrieve_with_scores(
             "nonexistent_hash_1234567890123456789012345678901234567890", "q", top_k=3
         )
-        assert results == ""
-
-
-# ---------------------------------------------------------------------------
-# Multi-collection retrieval + source provenance
-# ---------------------------------------------------------------------------
-
-
-class TestMultiCollectionRetrieval:
-    def test_retrieve_from_multiple_collections(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CI", "true")
-        monkeypatch.setenv("AI_MOCK", "true")
-        vs = VectorStore()
-        h1 = "1" * 64
-        h2 = "2" * 64
-        vs.store_chunks(
-            h1,
-            ["alpha content about cats"],
-            [{"source_hash": h1, "filename": "cats.pdf", "page": 1, "chunk_index": 0}],
-        )
-        vs.store_chunks(
-            h2,
-            ["beta content about dogs"],
-            [{"source_hash": h2, "filename": "dogs.pdf", "page": 1, "chunk_index": 0}],
-        )
-        results = vs.retrieve_from_multiple_collections([h1, h2], "cats dogs", top_k=5)
-        assert isinstance(results, str)
-        assert "cats" in results or "dogs" in results
-
-    def test_retrieve_with_sources_preserves_provenance(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("CI", "true")
-        monkeypatch.setenv("AI_MOCK", "true")
-        vs = VectorStore()
-        h1 = "x" * 64
-        h2 = "y" * 64
-        vs.store_chunks(
-            h1,
-            ["content about apples"],
-            [{"source_hash": h1, "filename": "apples.pdf", "page": 3, "chunk_index": 0}],
-        )
-        vs.store_chunks(
-            h2,
-            ["content about oranges"],
-            [{"source_hash": h2, "filename": "oranges.pdf", "page": 7, "chunk_index": 1}],
-        )
-        results = vs.retrieve_from_multiple_collections_with_sources(
-            [h1, h2], "apples oranges", top_k=5
-        )
-        assert len(results) >= 1
-        for r in results:
-            assert "text" in r
-            assert "filename" in r
-            assert "page" in r
-            assert "chunk_index" in r
-            assert "score" in r
-            assert r["filename"] in ("apples.pdf", "oranges.pdf")
-
-    def test_multi_collection_truncates_to_top_k(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CI", "true")
-        monkeypatch.setenv("AI_MOCK", "true")
-        vs = VectorStore()
-        h1 = "p" * 64
-        h2 = "q" * 64
-        vs.store_chunks(
-            h1,
-            ["a", "b", "c"],
-            [{"source_hash": h1, "filename": "f1", "page": 1, "chunk_index": i} for i in range(3)],
-        )
-        vs.store_chunks(
-            h2,
-            ["d", "e", "f"],
-            [{"source_hash": h2, "filename": "f2", "page": 1, "chunk_index": i} for i in range(3)],
-        )
-        results = vs.retrieve_from_multiple_collections_with_sources(
-            [h1, h2], "a b c d e f", top_k=3
-        )
-        assert len(results) <= 3
-
-    def test_multi_collection_empty_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CI", "true")
-        monkeypatch.setenv("AI_MOCK", "true")
-        vs = VectorStore()
-        results = vs.retrieve_from_multiple_collections_with_sources([], "q", top_k=5)
         assert results == []
 
 

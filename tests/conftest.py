@@ -38,6 +38,22 @@ sys.path.insert(0, str(ROOT))
 load_dotenv()
 
 
+def _enable_sqlite_fk(dbapi_conn, _record):  # noqa: ANN001
+    """Enable SQLite foreign-key enforcement (cascades) for tests."""
+    try:
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# Registered once at import time (not per test): registering inside the
+# ``app`` fixture below added a new global ``Engine`` listener on every
+# test, so late-suite connections ran hundreds of redundant handlers.
+event.listen(Engine, "connect", _enable_sqlite_fk)
+
+
 @pytest.fixture()
 def app() -> Generator[object]:
     """Create a fresh app + isolated DB for each test.
@@ -70,16 +86,6 @@ def app() -> Generator[object]:
 
     cfg = Config()
     application = create_app(cfg)
-
-    # Enable SQLite foreign-key enforcement (cascades) for tests.
-    @event.listens_for(Engine, "connect")
-    def _enable_fk(dbapi_conn, _records):  # noqa: ANN001
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
 
     with application.app_context():
         db.create_all()

@@ -193,6 +193,28 @@ class TestChatStream:
         res = client.post(f"/notebooks/{nb_id}/chat", json={"question": ""})
         assert res.status_code == 400
 
+    def test_stream_error_frame_hides_details(self, client: object, app: object) -> None:
+        """LLM failures must yield an opaque error frame, not str(exc)."""
+        _login(client, app, "chatstream3")
+        nb_id = _create_notebook(client, app, "Chat Stream Err NB")
+        from unittest.mock import patch
+
+        def _failing_stream(notebook: object, question: str):  # noqa: ANN001, ANN202
+            raise RuntimeError("secret-internal-detail")
+            yield "unreachable"
+
+        with patch("src.routes.chat.ChatService") as mock_cls:
+            mock_cls.return_value.chat_stream.side_effect = lambda nb, q: _failing_stream(nb, q)
+            res = client.post(f"/notebooks/{nb_id}/chat", json={"question": "hi"})
+        assert res.status_code == 200
+        body = res.get_data(as_text=True)
+        assert "secret-internal-detail" not in body
+        frames = [line for line in body.split("\n") if line.startswith("data: ")]
+        assert frames, "expected at least an error frame"
+        last_data = json.loads(frames[-1].replace("data: ", ""))
+        assert last_data.get("done") is True
+        assert "error" in last_data
+
 
 class TestChatHistory:
     def test_returns_history(

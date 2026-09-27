@@ -18,10 +18,23 @@ import logging
 import threading
 import uuid
 
+from src.models import (
+    AUDIO_STATUS_FAILED,
+    AUDIO_STATUS_QUEUED,
+    AUDIO_STATUS_SCRIPTING,
+    AUDIO_STATUS_SYNTHESIZING,
+    VIDEO_STATUS_FAILED,
+)
+
 logger = logging.getLogger(__name__)
 
 #: Statuses that mean a media job may still be running.
-TRANSIENT_MEDIA_STATUSES = ("queued", "scripting", "synthesizing")
+#: Built from the canonical ``models`` constants so a rename can never drift.
+TRANSIENT_MEDIA_STATUSES = (
+    AUDIO_STATUS_QUEUED,
+    AUDIO_STATUS_SCRIPTING,
+    AUDIO_STATUS_SYNTHESIZING,
+)
 
 
 def _new_job_id() -> str:
@@ -56,10 +69,10 @@ def _mark_crashed(
                 )
                 return
             if kind == "audio":
-                nb.audio_status = "failed"
+                nb.audio_status = AUDIO_STATUS_FAILED
                 nb.audio_error = "Generation crashed unexpectedly."
             else:
-                nb.video_status = "failed"
+                nb.video_status = VIDEO_STATUS_FAILED
                 nb.video_error = "Generation crashed unexpectedly."
             db.session.commit()
     except Exception:
@@ -212,11 +225,11 @@ def recover_interrupted_media_jobs(app: object) -> int:
         )
         for nb in notebooks:
             if nb.audio_status in TRANSIENT_MEDIA_STATUSES:
-                nb.audio_status = "failed"
+                nb.audio_status = AUDIO_STATUS_FAILED
                 nb.audio_error = "Generation was interrupted by a restart; please retry."
                 recovered += 1
             if nb.video_status in TRANSIENT_MEDIA_STATUSES:
-                nb.video_status = "failed"
+                nb.video_status = VIDEO_STATUS_FAILED
                 nb.video_error = "Generation was interrupted by a restart; please retry."
                 recovered += 1
         if recovered:

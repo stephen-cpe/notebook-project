@@ -16,9 +16,9 @@ from flask_login import current_user, login_required
 from werkzeug.wrappers import Response as WerkzeugResponse
 
 from src.extensions import db
+from src.models import VIDEO_STATUS_NONE, VIDEO_STATUS_QUEUED
 from src.routes._helpers import require_owner
 from src.services.jobs import TRANSIENT_MEDIA_STATUSES, launch_video_job
-from src.services.video_service import VIDEO_STATUS_QUEUED
 
 video_bp = Blueprint("video", __name__)
 
@@ -100,7 +100,7 @@ def delete_video(notebook_id: int) -> tuple[Response, int]:
             video_path = Path.cwd() / video_path
         video_path.unlink(missing_ok=True)
     notebook.video_path = None
-    notebook.video_status = "none"
+    notebook.video_status = VIDEO_STATUS_NONE
     notebook.video_error = None
     notebook.video_generation += 1
     db.session.commit()

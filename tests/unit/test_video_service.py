@@ -15,16 +15,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.extensions import db
-from src.models import Notebook, Source, User
-from src.repositories import content_registry_repo
-from src.services.auth_service import hash_password
-from src.services.video_service import (
+from src.models import (
     VIDEO_STATUS_FAILED,
     VIDEO_STATUS_NONE,
     VIDEO_STATUS_QUEUED,
     VIDEO_STATUS_READY,
     VIDEO_STATUS_SCRIPTING,
     VIDEO_STATUS_SYNTHESIZING,
+    Notebook,
+    Source,
+    User,
+)
+from src.repositories import content_registry_repo
+from src.services.auth_service import hash_password
+from src.services.video_service import (
     VideoService,
     _ffmpeg_available,
     _load_fonts,
@@ -305,6 +309,49 @@ class TestVideoService:
                 args = mock_run.call_args.args[0]
                 assert "ffmpeg" in args
                 assert not Path(output_path).with_suffix(".txt").exists()
+
+    def test_combine_to_mp4_keeps_manifests_in_scratch_dir(
+        self, app: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Concat manifests/silence must not live beside the shared output.
+
+        Two overlapping jobs for one notebook share the output directory, so
+        manifests and generated silence belong in the job-isolated scratch
+        dir; otherwise concurrent jobs overwrite each other's files mid-run.
+        """
+        monkeypatch.setenv("AI_MOCK", "true")
+        nb = self._make_notebook(app)
+
+        with app.app_context():
+            nb = db.session.merge(nb)
+            svc = VideoService()
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                slide_files = [str(Path(tmpdir) / f"slide_{i}.png") for i in range(2)]
+                for f in slide_files:
+                    Path(f).write_bytes(b"fake png")
+
+                audio_files = [str(Path(tmpdir) / f"audio_{i}.mp3") for i in range(2)]
+                for f in audio_files:
+                    Path(f).write_bytes(b"fake mp3")
+
+                output_path = str(Path(tmpdir) / "output.mp4")
+                scratch = Path(tmpdir) / "tmp_job1"
+                scratch.mkdir()
+
+                with patch("src.services.video_service.subprocess.run") as mock_run:
+                    mock_run.return_value = MagicMock(stdout="")
+                    svc._combine_to_mp4(
+                        slide_files, audio_files, output_path, scratch_dir=str(scratch)
+                    )
+
+                assert mock_run.call_count > 0
+                # Nothing job-related may leak into the shared output dir.
+                assert list(Path(tmpdir).glob("*.txt")) == []
+                assert list(Path(tmpdir).glob("silence_*.mp3")) == []
+                # Scratch manifests are cleaned up after the run.
+                assert list(scratch.glob("*.txt")) == []
+                assert list(scratch.glob("silence_*.mp3")) == []
 
     def test_get_audio_duration_handles_error(
         self, app: object, monkeypatch: pytest.MonkeyPatch

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
 from typing import Any
 
 from flask import (
@@ -76,10 +74,9 @@ def open_notebook(notebook_id: int) -> ViewReturn:
     from src.repositories import source_repo
 
     sources = source_repo.list_by_notebook(notebook_id)
-    suggested_questions: list[str] = []
-    if notebook.suggested_questions:
-        with contextlib.suppress(json.JSONDecodeError, TypeError):
-            suggested_questions = json.loads(notebook.suggested_questions)
+    from src.services.summary_service import parse_suggested_questions
+
+    suggested_questions = parse_suggested_questions(notebook.suggested_questions)
     cfg = current_app.config["NOTEBOOK_CONFIG"]
     return render_template(
         "notebook.html",
