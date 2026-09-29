@@ -1,10 +1,10 @@
 """Content cleanup service — reference-counted deletion of orphaned content.
 
-When a Source is deleted, the underlying ChromaDB collection and
-ContentRegistry entry are shared across notebooks/users (dedup, NFR-22). They
-must only be removed when no remaining Source references the same
-``content_hash``. This service centralizes that reference-counted cleanup so
-the delete routes stay thin.
+When a Source is deleted, the underlying ChromaDB collection,
+ContentRegistry entry, and cached figure thumbnails are shared across
+notebooks/users (dedup, NFR-22). They must only be removed when no remaining
+Source references the same ``content_hash``. This service centralizes that
+reference-counted cleanup so the delete routes stay thin.
 
 Functions never raise: cleanup is best-effort and logged on failure so a
 storage hiccup never blocks a user-facing delete.
@@ -13,6 +13,7 @@ storage hiccup never blocks a user-facing delete.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from pathlib import Path
 
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 def cleanup_orphaned_content(content_hash: str, exclude_source_id: int | None = None) -> bool:
-    """Remove Chroma collection + ContentRegistry row if no Sources remain.
+    """Remove Chroma collection + ContentRegistry row + figures if no Sources remain.
 
     Args:
         content_hash: the shared content hash to check.
@@ -66,8 +67,28 @@ def cleanup_orphaned_content(content_hash: str, exclude_source_id: int | None = 
         logger.warning("cleanup_orphaned_content: delete_entry failed: %s", exc)
         return False
 
+    # The registry row was the last shared reference: cached figure
+    # thumbnails for this hash are orphaned too. Best-effort; a failure here
+    # must not undo the confirmed vector/registry cleanup above.
+    _remove_figure_dir(content_hash)
+
     logger.info("cleanup_orphaned_content: removed orphaned content for hash %s", content_hash[:12])
     return True
+
+
+def _remove_figure_dir(content_hash: str) -> None:
+    """Best-effort removal of ``DATA_DIR/figures/<hash>/`` (never raises)."""
+    try:
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", content_hash or ""):
+            return
+        from src.config import Config
+
+        figures_dir = Path(Config().data_dir) / "figures" / content_hash
+        if figures_dir.exists():
+            shutil.rmtree(figures_dir, ignore_errors=True)
+            logger.info("cleanup_orphaned_content: removed figures for hash %s", content_hash[:12])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("cleanup_orphaned_content: figure cleanup failed: %s", exc)
 
 
 def cleanup_notebook_media(notebook_id: int, data_dir: str) -> None:

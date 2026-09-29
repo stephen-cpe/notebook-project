@@ -385,18 +385,13 @@ class TestGetService:
 
 
 class TestProviderSelection:
-    def test_local_backend_constructed_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When provider=local and not mock, a _LocalTransformersOcrBackend is built."""
+    def test_vision_backend_constructed_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When provider=local (deprecated) and not mock, vision backend is built."""
         import src.services.ocr_service as ocr
 
-        constructed: dict[str, Any] = {}
-        real_cls = ocr._LocalTransformersOcrBackend
+        real_cls = ocr._OllamaVisionBackend
 
-        def fake_local_init(self, token):
-            constructed["token"] = token
-
-        monkeypatch.setattr(real_cls, "__init__", fake_local_init)
-        monkeypatch.setattr(real_cls, "ocr_image", lambda self, image, prompt: "mock local ocr")
+        monkeypatch.setattr(real_cls, "ocr_image", lambda self, image, prompt: "mock vision ocr")
         monkeypatch.setenv("AI_MOCK", "false")
         monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
         monkeypatch.setenv("OCR_PROVIDER", "local")
@@ -404,21 +399,15 @@ class TestProviderSelection:
         # Trigger lazy backend construction by calling ocr_image.
         result = svc.ocr_image("fake.png", OCR_PROMPT_TEXT)
         assert isinstance(svc._backend, real_cls)
-        assert result == "mock local ocr"
+        assert result == "mock vision ocr"
 
-    def test_hf_inference_backend_when_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """When provider=hf_inference, an _HfInferenceOcrBackend is built (no local weights)."""
+    def test_vision_backend_when_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When provider=hf_inference (deprecated), vision backend is still built."""
         import src.services.ocr_service as ocr
 
-        constructed: dict[str, Any] = {}
-        real_cls = ocr._HfInferenceOcrBackend
+        real_cls = ocr._OllamaVisionBackend
 
-        def fake_hf_init(self, model, token, endpoint="", timeout=60):
-            constructed["model"] = model
-            constructed["endpoint"] = endpoint
-
-        monkeypatch.setattr(real_cls, "__init__", fake_hf_init)
-        monkeypatch.setattr(real_cls, "ocr_image", lambda self, image, prompt: "mock hf ocr")
+        monkeypatch.setattr(real_cls, "ocr_image", lambda self, image, prompt: "mock vision ocr")
         monkeypatch.setenv("AI_MOCK", "false")
         monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
         monkeypatch.setenv("OCR_PROVIDER", "hf_inference")
@@ -426,27 +415,22 @@ class TestProviderSelection:
         svc = OCRService()
         result = svc.ocr_image("fake.png", OCR_PROMPT_TEXT)
         assert isinstance(svc._backend, real_cls)
-        assert constructed["model"] == "zai-org/GLM-OCR"
-        assert result == "mock hf ocr"
+        assert result == "mock vision ocr"
 
-    def test_hf_inference_with_custom_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_vision_model_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import src.services.ocr_service as ocr
 
-        constructed: dict[str, Any] = {}
-        real_cls = ocr._HfInferenceOcrBackend
+        real_cls = ocr._OllamaVisionBackend
 
-        def fake_hf_init(self, model, token, endpoint="", timeout=60):
-            constructed["endpoint"] = endpoint
-
-        monkeypatch.setattr(real_cls, "__init__", fake_hf_init)
-        monkeypatch.setattr(real_cls, "ocr_image", lambda self, image, prompt: "mock hf ocr")
+        monkeypatch.setattr(real_cls, "ocr_image", lambda self, image, prompt: "mock vision ocr")
         monkeypatch.setenv("AI_MOCK", "false")
         monkeypatch.setenv("OCR_FALLBACK_ENABLED", "true")
-        monkeypatch.setenv("OCR_PROVIDER", "hf_inference")
-        monkeypatch.setenv("OCR_INFERENCE_ENDPOINT", "https://my.vlm.huggingface.cloud")
+        monkeypatch.setenv("OCR_PROVIDER", "vision")
+        monkeypatch.setenv("OLLAMA_VISION_MODEL", "glm-5.3-flash:cloud")
         svc = OCRService()
         svc.ocr_image("fake.png", OCR_PROMPT_TEXT)
-        assert constructed["endpoint"] == "https://my.vlm.huggingface.cloud"
+        assert isinstance(svc._backend, real_cls)
+        assert svc._backend._model == "glm-5.3-flash:cloud"
 
     def test_unknown_provider_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("AI_MOCK", "false")

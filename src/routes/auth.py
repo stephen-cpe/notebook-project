@@ -139,6 +139,13 @@ def settings() -> ViewReturn:
             user.voice_speaker = voice_spk
             changed = True
 
+        from src.services.difficulty import DIFFICULTY_LEVELS, normalize_difficulty
+
+        difficulty = normalize_difficulty(request.form.get("difficulty", ""))
+        if difficulty != getattr(user, "difficulty", "Normal"):
+            user.difficulty = difficulty
+            changed = True
+
         if changed:
             db.session.commit()
             flash("Settings updated.", "success")
@@ -149,11 +156,14 @@ def settings() -> ViewReturn:
     from flask import current_app
 
     cfg = current_app.config["NOTEBOOK_CONFIG"]
+    from src.services.difficulty import DIFFICULTY_LEVELS
+
     return render_template(
         "settings.html",
         avatars=ALLOWED_AVATARS,
         speakers=ALLOWED_SPEAKERS,
         voice_enabled=cfg.voice_enabled,
+        difficulties=DIFFICULTY_LEVELS,
     )
 
 

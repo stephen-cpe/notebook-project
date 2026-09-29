@@ -85,6 +85,7 @@ def voice_turn(notebook_id: int) -> tuple[Response, int]:
                 transcript=result.transcript,
                 answer=result.answer,
                 sources=result.sources,
+                source_total=result.source_total,
                 latency_ms=result.latency_ms,
                 reply_audio_url=result.reply_audio_url,
             ),

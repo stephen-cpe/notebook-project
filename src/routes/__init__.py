@@ -13,10 +13,12 @@ def register_blueprints(app: Flask) -> None:
     from .audio import audio_bp
     from .auth import auth_bp
     from .chat import chat_bp
+    from .export import export_bp
     from .index import index_bp
     from .notebooks import notebooks_bp
     from .sources import sources_bp
     from .summary import summary_bp
+    from .tasks import tasks_bp
     from .video import video_bp
 
     app.register_blueprint(index_bp)
@@ -28,6 +30,8 @@ def register_blueprints(app: Flask) -> None:
     app.register_blueprint(summary_bp)
     app.register_blueprint(audio_bp)
     app.register_blueprint(video_bp)
+    app.register_blueprint(tasks_bp)
+    app.register_blueprint(export_bp)
 
     # Voice blueprint is registered only when voice is enabled.
     cfg = app.config.get("NOTEBOOK_CONFIG")

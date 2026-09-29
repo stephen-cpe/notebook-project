@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from src.extensions import db
 from src.models import Notebook, Source
 from src.services.context_builder import select_sources_within_budget
+from src.services.llm_json import extract_json
 from src.services.ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,46 @@ SUMMARY_SYSTEM_PROMPT = (
 EMPTY_SOURCES_PLACEHOLDER = "No sources have been uploaded yet."
 
 
+def _normalize_title(title: str) -> str:
+    """Normalize a question title for dedup (lowercase, strip parens/punct)."""
+    import re
+    import string
+
+    text = (title or "").lower().strip()
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = text.translate(str.maketrans("", "", string.punctuation))
+    return " ".join(text.split())
+
+
+def _is_duplicate_title(title: str, seen: list[str]) -> bool:
+    """Return True when ``title`` duplicates a seen title (exact/substring)."""
+    norm = _normalize_title(title)
+    if not norm:
+        return True
+    for other in seen:
+        other_norm = _normalize_title(other)
+        if not other_norm:
+            continue
+        if norm == other_norm:
+            return True
+        if len(norm) >= 20 and (norm in other_norm or other_norm in norm):
+            return True
+    return False
+
+
+def dedup_questions(questions: list[str]) -> list[str]:
+    """Deduplicate suggested questions, preserving order (max 5)."""
+    out: list[str] = []
+    for q in questions:
+        text = str(q).strip()
+        if not text or _is_duplicate_title(text, out):
+            continue
+        out.append(text)
+        if len(out) >= 5:
+            break
+    return out
+
+
 @dataclass
 class SummaryResult:
     """Outcome of summary generation."""
@@ -66,19 +107,28 @@ def parse_summary_response(raw: str) -> tuple[str, list[str]]:
 
     Falls back to returning the raw text as the summary if JSON parsing fails.
     Truncates suggested questions to 5.
-    Handles markdown code fences (```json ... ```) that LLMs often wrap JSON in.
+    Handles markdown code fences (```json ... ```) and trailing prose via
+    the shared ``llm_json`` helper.
     """
     if not raw:
         return "", []
     cleaned = _strip_markdown_fences(raw)
+    data = extract_json(cleaned)
+    if data is None:
+        try:
+            data = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError):
+            data = None
+    if not isinstance(data, dict):
+        logger.warning("Failed to parse summary JSON: %.200s...", cleaned[:200])
+        return raw, []
     try:
-        data = json.loads(cleaned)
         summary = data.get("summary", "")
         questions = data.get("suggested_questions", [])
         if not isinstance(questions, list):
             questions = []
-        return str(summary), [str(q) for q in questions[:5]]
-    except (json.JSONDecodeError, TypeError):
+        return str(summary), dedup_questions([str(q) for q in questions])
+    except (TypeError, AttributeError):
         logger.warning("Failed to parse summary JSON: %.200s...", cleaned[:200])
         return raw, []
 
@@ -129,6 +179,15 @@ class SummaryService:
                 skipped=True,
             )
 
+        # Best-effort full-coverage digests (background thread: one LLM pass
+        # per changed source, cached by content hash for chat + overviews).
+        try:
+            from src.services.section_digest import ensure_notebook_digests
+
+            ensure_notebook_digests(notebook.id, self._config)
+        except Exception:  # noqa: BLE001
+            logger.debug("Digest ensure skipped for notebook %d", notebook.id)
+
         # Get source texts (budgeted, ordered by upload time).
         selection = select_sources_within_budget(
             notebook.id, self._config.overview_max_context_chars
@@ -144,10 +203,13 @@ class SummaryService:
                 skipped=False,
             )
 
-        # Call LLM.
+        # Call LLM. The cached section digests cover every part of every
+        # source (full coverage); the budgeted raw texts add verbatim depth.
         try:
+            digest_block = self._digest_block(notebook.id)
             user_content = (
                 "Summarize the following source texts and suggest 5 questions:\n\n"
+                + (digest_block + "\n\n" if digest_block else "")
                 + "\n\n".join(source_texts)
             )
             messages = [
@@ -156,6 +218,7 @@ class SummaryService:
             ]
             raw = self._client.chat(messages)
             summary, questions = parse_summary_response(raw)
+            questions = self._augment_with_web(notebook, questions)
         except Exception as exc:  # noqa: BLE001
             logger.error("Summary generation failed for notebook %d: %s", notebook.id, exc)
             return None
@@ -172,6 +235,55 @@ class SummaryService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _digest_block(self, notebook_id: int) -> str:
+        """Return the stitched cached digests for overview prompts ("" if cold)."""
+        try:
+            from src.services.section_digest import notebook_digest_text
+
+            if not self._config.rag_summary_map:
+                return ""
+            return notebook_digest_text(
+                notebook_id, self._config.rag_digest_max_chars, self._config
+            )
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _augment_with_web(self, notebook: Notebook, questions: list[str]) -> list[str]:
+        """Append opt-in web-augmented questions when internal ones run short.
+
+        Fail-closed: proprietary topics, disabled flag, mock mode, or any
+        error yields the input unchanged.
+        """
+        try:
+            if len(questions) >= 5 or not self._config.web_search_enabled:
+                return questions
+            from src.services.web_search_service import (
+                classify_topic_source,
+                synthesize_external_questions,
+                web_search,
+            )
+
+            topic = f"{notebook.name} {notebook.description or ''}".strip()
+            if classify_topic_source(topic) == "proprietary":
+                return questions
+            snippets = web_search(
+                topic or notebook.name,
+                max_results=self._config.web_search_max_results,
+                timeout=self._config.web_search_timeout,
+            )
+            if not snippets:
+                return questions
+            external = synthesize_external_questions(topic, snippets)
+            for item in external:
+                title = str(item.get("title", "")).strip()
+                if title and not _is_duplicate_title(title, questions):
+                    questions.append(title)
+                if len(questions) >= 5:
+                    break
+            return dedup_questions(questions)
+        except Exception:  # noqa: BLE001
+            return questions
 
     def _get_source_hashes(self, notebook_id: int) -> list[str]:
         """Return content hashes for all ready/partial sources."""

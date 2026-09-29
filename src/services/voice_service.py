@@ -41,6 +41,7 @@ class VoiceTurnResult:
     reply_audio_url: str | None
     latency_ms: int
     error: str | None = None
+    source_total: int = 0
 
 
 class VoiceService:
@@ -129,6 +130,7 @@ class VoiceService:
             chat_result = self._chat.chat_sync(notebook, transcript)
             answer = chat_result.get("answer", "")
             sources = chat_result.get("sources", []) or []
+            source_total = int(chat_result.get("source_total", len(sources)) or 0)
         except Exception as exc:  # noqa: BLE001
             logger.exception("voice turn chat failed: %s", exc)
             return VoiceTurnResult(
@@ -173,6 +175,7 @@ class VoiceService:
             reply_audio_url=reply_url,
             latency_ms=int((time.time() - start) * 1000),
             error=error,
+            source_total=source_total,
         )
 
 

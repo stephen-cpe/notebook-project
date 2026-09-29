@@ -1,21 +1,25 @@
-"""OCR service — GLM-OCR via HuggingFace transformers OR HF Inference API.
+"""OCR / vision service — ``glm-5.3-flash`` via Ollama Cloud.
 
-GLM-OCR (``zai-org/GLM-OCR``) is a multimodal OCR model for documents/images.
-By default it runs locally via ``transformers.AutoProcessor`` +
-``AutoModelForImageTextToText``. Set ``OCR_PROVIDER=hf_inference`` to instead
-use Hugging Face's hosted Inference API (chat-completion with image content) —
-no local weights, per-call network latency, requires ``HF_TOKEN``.
+The old HuggingFace ``GLM-OCR`` (``zai-org/GLM-OCR``) path has been replaced:
+all image OCR, table extraction, and figure description now use a single
+natively multimodal vision model (``OLLAMA_VISION_MODEL``, default
+``glm-5.3-flash:cloud``) through the existing Ollama Cloud chat API
+(``OllamaClient.chat_with_images``).
 
-Behavior:
+Behavior (public API unchanged):
 - ``OCR_FALLBACK_ENABLED=false`` (or ``AI_MOCK=true`` with no real call):
   ``is_available()`` returns False; ``ocr_image``/``ocr_pdf`` return "".
 - ``AI_MOCK=true`` + enabled: a deterministic mock returns canned text per
-  prompt type (offline, no model download).
-- Real mode: loads the model once (local) or calls the HF router per request
-  (hf_inference), processes rendered PIL images.
+  prompt type (offline, no network).
+- Real mode: renders PDFs via Poppler, encodes images as base64, and calls
+  the vision model. Failures degrade to "" (never raise from public API
+  except for unknown ``OCR_PROVIDER``).
 
-HF token handling mirrors ``embeddings`` (NFR-26): absent -> one-time
-WARNING; never logged.
+``OCR_PROVIDER`` / ``OCR_INFERENCE_ENDPOINT`` / ``HF_TOKEN`` are kept as
+deprecated aliases so old ``.env`` files and tests keep importing; they no
+longer select the backend. The old ``_LocalTransformersOcrBackend`` and
+``_HfInferenceOcrBackend`` classes are kept as deprecated shims so their
+isolated unit tests keep passing.
 """
 
 from __future__ import annotations
@@ -35,8 +39,34 @@ OCR_PROMPT_TEXT = "Text Recognition:"
 OCR_PROMPT_FORMULA = "Formula Recognition:"
 OCR_PROMPT_TABLE = "Table Recognition:"
 
-# Default model id (used by both backends).
+# Deprecated alias: the HF GLM-OCR model id is no longer used for inference.
+# Kept so old imports keep working.
 GLM_OCR_MODEL = "zai-org/GLM-OCR"
+
+# Default vision model (mirrors Config default).
+VISION_MODEL_DEFAULT = "glm-5.3-flash:cloud"
+
+# Natural-language prompts sent to the vision model per OCR prompt type.
+_VISION_PROMPTS = {
+    OCR_PROMPT_TEXT: (
+        "Extract all text visible in this image. Return only the extracted "
+        "text, no commentary. Preserve reading order."
+    ),
+    OCR_PROMPT_TABLE: (
+        "Extract any tables visible in this image. Preserve row/column "
+        "structure using GitHub-Flavored Markdown pipe tables. Return only "
+        "the table content."
+    ),
+    OCR_PROMPT_FORMULA: (
+        "Extract any mathematical formulas visible in this image. Return "
+        "them using LaTeX ($...$ / $$...$$). Return only the formulas."
+    ),
+}
+
+_VISION_FIGURE_PROMPT = (
+    "Describe the figure, diagram, or chart visible in this image in 2-3 "
+    "sentences, focusing on visual elements, labels, axes, and structure."
+)
 
 _token_warning_emitted = False
 
@@ -47,8 +77,13 @@ class _OcrBackend(Protocol):
     def ocr_image(self, image: Any, prompt: str) -> str: ...  # noqa: ANN401
 
 
+def _vision_prompt_for(prompt: str) -> str:
+    """Map a legacy OCR prompt constant to a vision-model prompt."""
+    return _VISION_PROMPTS.get(prompt, _VISION_PROMPTS[OCR_PROMPT_TEXT])
+
+
 class OCRService:
-    """GLM-OCR wrapper with mock support + lazy backend selection."""
+    """Vision OCR wrapper with mock support + lazy backend selection."""
 
     def __init__(self, config: Config | None = None) -> None:
         if config is None:
@@ -65,6 +100,7 @@ class OCRService:
         self._poppler_path: str = config.poppler_path
         self._hf_token: str = config.hf_token
         self.provider: str = config.ocr_provider
+        self.vision_model: str = config.vision_model
         self._backend: _OcrBackend | None = None
 
         self._handle_hf_token()
@@ -89,7 +125,13 @@ class OCRService:
             return self._mock_ocr(image, prompt)
         if self._backend is None:
             self._backend = self._make_backend()
-        return self._backend.ocr_image(image, prompt)
+        try:
+            return self._backend.ocr_image(image, prompt)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Vision OCR failed: %s", exc)
+            return ""
 
     def ocr_pdf(self, pdf_path: str, prompt: str = OCR_PROMPT_TEXT) -> str:
         """Render a PDF to images and OCR each page. Returns "" if disabled.
@@ -130,6 +172,23 @@ class OCRService:
             if text:
                 parts.append(f"[Image {i + 1}]\n{text}")
         return "\n\n".join(parts)
+
+    def describe_figure(self, image: Any) -> str:  # noqa: ANN401
+        """Describe a figure/diagram image in 2-3 sentences ("" if disabled)."""
+        if not self._enabled:
+            return ""
+        if self._mock:
+            return self._mock_ocr(image, _VISION_FIGURE_PROMPT)
+        if self._backend is None:
+            self._backend = self._make_backend()
+        backend = self._backend
+        if isinstance(backend, _OllamaVisionBackend):
+            try:
+                return backend.ocr_image_with_prompt(image, _VISION_FIGURE_PROMPT)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Figure description failed: %s", exc)
+                return ""
+        return self.ocr_image(image, OCR_PROMPT_TEXT)
 
     def render_pdf_pages(self, pdf_path: str, max_pages: int | None = None) -> list[Any]:
         """Convert a PDF to a list of PIL images using pdf2image + Poppler.
@@ -173,20 +232,30 @@ class OCRService:
     # ------------------------------------------------------------------
 
     def _make_backend(self) -> _OcrBackend:
-        """Select the real OCR backend based on ``ocr_provider``."""
-        provider = self.provider
-        if provider == "hf_inference":
-            return _HfInferenceOcrBackend(
-                model=GLM_OCR_MODEL,
-                token=self._hf_token,
-                endpoint=self._config.ocr_inference_endpoint,
-                timeout=self._config.hf_timeout_seconds,
+        """Select the vision backend.
+
+        ``OCR_PROVIDER`` is deprecated: ``local`` / ``hf_inference`` /
+        ``vision`` / ``ollama`` / ``cloud`` all resolve to the consolidated
+        Ollama vision backend. Anything else raises ``ValueError`` so a typo
+        is never silently ignored.
+        """
+        provider = (self.provider or "").strip().lower()
+        if provider in ("local", "hf_inference", "vision", "ollama", "cloud", ""):
+            if provider in ("local", "hf_inference"):
+                logger.info(
+                    "OCR_PROVIDER=%r is deprecated; using consolidated vision "
+                    "model %r instead of HuggingFace GLM-OCR.",
+                    self.provider,
+                    self.vision_model,
+                )
+            return _OllamaVisionBackend(
+                model=self.vision_model,
+                timeout=getattr(self._config, "vision_timeout", 300),
             )
-        if provider == "local":
-            return _LocalTransformersOcrBackend(token=self._hf_token)
         raise ValueError(
-            f"Unknown OCR_PROVIDER={provider!r}. "
-            "Expected 'local' (transformers) or 'hf_inference' (HF Inference API)."
+            f"Unknown OCR_PROVIDER={self.provider!r}. "
+            "Expected 'local', 'hf_inference' (both deprecated, use vision), "
+            "or 'vision' (glm-5.3-flash via Ollama Cloud)."
         )
 
     # ------------------------------------------------------------------
@@ -214,7 +283,8 @@ class OCRService:
         return f"[mock OCR {digest}]"
 
     # ------------------------------------------------------------------
-    # HF token handling
+    # HF token handling (deprecated; kept so the absence warning still fires
+    # for old .env files and the token is never logged).
     # ------------------------------------------------------------------
 
     def _handle_hf_token(self) -> None:
@@ -229,16 +299,81 @@ class OCRService:
 
 
 # ----------------------------------------------------------------------
-# Backends
+# Vision backend (consolidated glm-5.3-flash via Ollama Cloud)
+# ----------------------------------------------------------------------
+
+
+class _OllamaVisionBackend:
+    """Vision backend: Ollama Cloud ``/api/chat`` with images.
+
+    No local weights are required. Each call is an HTTPS request to the
+    configured Ollama Cloud host. Requires ``OLLAMA_CLOUD_API_KEY``; without
+    it the API returns 4xx and the error is surfaced (not silently empty).
+    """
+
+    def __init__(self, model: str = VISION_MODEL_DEFAULT, timeout: int = 300) -> None:
+        from src.services.ollama_client import get_ollama_client
+
+        self._model = model or VISION_MODEL_DEFAULT
+        self._timeout = timeout
+        self._client = get_ollama_client()
+        logger.info(
+            "Configured Ollama vision OCR backend (model=%s, timeout=%ss)",
+            self._model,
+            timeout,
+        )
+
+    def ocr_image(self, image: Any, prompt: str = OCR_PROMPT_TEXT) -> str:  # noqa: ANN401
+        """OCR a PIL image with a legacy prompt constant."""
+        return self.ocr_image_with_prompt(image, _vision_prompt_for(prompt))
+
+    def ocr_image_with_prompt(self, image: Any, prompt: str) -> str:  # noqa: ANN401
+        """OCR a PIL image with a full natural-language prompt."""
+        b64 = _pil_to_b64(image)
+        if not b64:
+            return ""
+        out = self._call_with_retry(prompt, b64)
+        return out.strip() if out else ""
+
+    def _call_with_retry(self, prompt: str, b64: str) -> str:
+        """Call the vision API with backoff; pause (not fail) on long backoff."""
+        from src.services.resilience import PauseJob, resilient
+
+        def _call() -> str:
+            return self._client.chat_with_images(prompt, [b64], model=self._model)
+
+        try:
+            result: str = resilient(_call, max_attempts=3, base_delay=2.0)
+            return result
+        except PauseJob as exc:
+            logger.error("Vision OCR paused (rate-limited): %s", exc)
+            return ""
+
+
+def _pil_to_b64(image: Any) -> str:  # noqa: ANN401
+    """Encode a PIL Image (or bytes-like) as a base64 PNG string (no prefix)."""
+    buf = io.BytesIO()
+    try:
+        image.save(buf, format="PNG")
+    except AttributeError:
+        if isinstance(image, (bytes, bytearray)):
+            return base64.b64encode(bytes(image)).decode()
+        if hasattr(image, "read"):
+            raw = image.read()
+        else:
+            with open(image, "rb") as fh:  # noqa: SIM115
+                raw = fh.read()
+        return base64.b64encode(raw).decode()
+    return base64.b64encode(buf.getvalue()).decode()
+
+
+# ----------------------------------------------------------------------
+# Deprecated HuggingFace backends (kept so old unit tests keep passing)
 # ----------------------------------------------------------------------
 
 
 class _LocalTransformersOcrBackend:
-    """Local backend: ``transformers`` AutoProcessor + AutoModelForImageTextToText.
-
-    Model weights are downloaded from Hugging Face once, then all inference runs
-    on the local machine — no network traffic per OCR call.
-    """
+    """Deprecated: local ``transformers`` GLM-OCR backend (kept for tests)."""
 
     def __init__(self, token: str) -> None:
         self._token = token
@@ -313,16 +448,7 @@ class _LocalTransformersOcrBackend:
 
 
 class _HfInferenceOcrBackend:
-    """Hosted backend: Hugging Face Inference API (chat-completion with image).
-
-    No local weights are required. Each call is an HTTPS request to the HF
-    Inference router (or a dedicated endpoint if ``endpoint`` is set).
-    Requires ``HF_TOKEN`` with READ scope; unauthenticated calls are rate-limited.
-
-    GLM-OCR is an ``image-text-to-text`` model — the HF router serves it via the
-    chat-completion endpoint. The PIL image is encoded as a base64 data URL and
-    passed as the ``image_url`` content part of a chat message.
-    """
+    """Deprecated: HF Inference API GLM-OCR backend (kept for tests)."""
 
     def __init__(self, model: str, token: str, endpoint: str = "", timeout: int = 60) -> None:
         from huggingface_hub import InferenceClient
@@ -435,3 +561,76 @@ def reset_ocr_service() -> None:
     global _service, _token_warning_emitted
     _service = None
     _token_warning_emitted = False
+
+
+def pdf_needs_vision_ocr(
+    file_path: str,
+    basic_text: str = "",
+    min_total_chars: int = 1000,
+    min_chars_per_page: int = 300,
+) -> bool:
+    """Decide whether a PDF actually needs vision OCR (smart gate).
+
+    Text-layer PDFs skip expensive rendering + LLM calls entirely; vision
+    runs only when the PDF looks scanned/image-heavy: almost no extractable
+    text, sparse text per page, or embedded raster images outnumbering pages.
+    Never raises — on any inspection error returns True (run vision rather
+    than silently dropping content).
+    """
+    try:
+        total_chars = len((basic_text or "").strip())
+        if total_chars < min_total_chars:
+            return True
+        from pypdf import PdfReader
+
+        reader = PdfReader(file_path)
+        num_pages = len(reader.pages) or 1
+        if (total_chars / num_pages) < min_chars_per_page:
+            return True
+        try:
+            image_count = _count_embedded_images(reader)
+            if image_count >= num_pages and num_pages > 0:
+                logger.info(
+                    "PDF %s has %d embedded images across %d pages — "
+                    "enabling vision OCR for figures/diagrams",
+                    file_path,
+                    image_count,
+                    num_pages,
+                )
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("PDF image-count probe failed for %s: %s", file_path, str(exc))
+        return False
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("PDF vision-OCR gate failed for %s: %s", file_path, str(exc))
+        return True
+
+
+def _count_embedded_images(reader: Any) -> int:  # noqa: ANN401
+    """Count embedded raster images across all PDF pages (best-effort)."""
+    import contextlib
+
+    image_count = 0
+    for page in reader.pages:
+        resources = page.get("/Resources")
+        if not resources:
+            continue
+        xobjects = resources.get("/XObject")
+        if not xobjects:
+            continue
+        with contextlib.suppress(Exception):
+            xobjects = xobjects.get_object()
+        if not hasattr(xobjects, "keys"):
+            continue
+        for key in xobjects:
+            try:
+                obj = xobjects[key]
+                with contextlib.suppress(Exception):
+                    obj = obj.get_object()
+                subtype = obj.get("/Subtype") if hasattr(obj, "get") else None
+                if str(subtype) == "/Image":
+                    image_count += 1
+            except Exception:  # noqa: BLE001, S112
+                logger.debug("Skipping unreadable XObject %s", key)
+                continue
+    return image_count

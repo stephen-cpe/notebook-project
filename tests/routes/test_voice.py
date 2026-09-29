@@ -69,6 +69,7 @@ def voice_app(monkeypatch: pytest.MonkeyPatch) -> object:
     fake_result.reply_audio_path = None
     fake_result.reply_audio_url = None
     fake_result.error = None
+    fake_result.source_total = 0
 
     mock_svc = MagicMock()
     mock_svc.run_voice_turn.return_value = fake_result
@@ -155,6 +156,7 @@ class TestVoiceTurn:
         fake.latency_ms = 1
         fake.reply_audio_path = None
         fake.reply_audio_url = None
+        fake.source_total = 0
         mock_svc = MagicMock()
         mock_svc.run_voice_turn.return_value = fake
         monkeypatch.setattr(vs, "get_voice_service", lambda: mock_svc)

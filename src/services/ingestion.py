@@ -1,13 +1,15 @@
-"""Ingestion pipeline — hash → parse → OCR fallback → chunk → embed → store.
+"""Ingestion pipeline — hash → parse → vision fallback → chunk → embed → store.
 
-The pipeline orchestrates the document_parser, ocr_service, chunker,
-embeddings (via vector_store), and the ContentRegistry for dedup.
+The pipeline orchestrates the document_parser, ocr_service (consolidated
+``glm-5.3-flash`` vision understanding), chunker, embeddings (via
+vector_store), and the ContentRegistry for dedup.
 
 Flow (``ingest_file``):
 1. Compute SHA-256 of the file content.
 2. If ContentRegistry already has this hash, skip re-embedding (dedup).
 3. Detect content type, extract text via document_parser.
-4. If text is below ``OCR_TEXT_THRESHOLD`` and OCR is enabled, run OCR.
+4. If text is below ``OCR_TEXT_THRESHOLD`` and vision is enabled, run vision
+   OCR (smart-gated for PDFs: text-layer PDFs skip rendering entirely).
 5. Chunk the text, embed, store in a content-keyed ChromaDB collection.
 6. Create/update the ContentRegistry entry (hash → collection + cached text).
 
@@ -21,10 +23,11 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.services.chunker import chunk_units
 from src.services.document_parser import (
+    IMAGE_CONTENT_TYPES,
     detect_content_type,
     extract_docx_images,
     extract_pptx_images,
@@ -32,7 +35,9 @@ from src.services.document_parser import (
     extract_units,
     parse_pdf_document,
 )
-from src.services.ocr_service import OCR_PROMPT_TEXT, get_ocr_service
+from src.services.furniture import dedup_furniture
+from src.services.ocr_service import OCR_PROMPT_TEXT, get_ocr_service, pdf_needs_vision_ocr
+from src.services.pipeline_version import compute_pipeline_version
 from src.services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
@@ -134,6 +139,13 @@ class IngestionService:
     def _ingest(self, file_path: str, filename: str) -> IngestionResult:
         # 1. Hash.
         content_hash = compute_hash(file_path)
+        pipeline_version = compute_pipeline_version(self._config)
+        logger.info(
+            "Ingest start: file=%s hash=%s pipeline=%s",
+            filename,
+            content_hash[:12],
+            pipeline_version,
+        )
 
         from src.repositories import content_registry_repo
 
@@ -276,6 +288,11 @@ class IngestionService:
             len(text),
             ocr_used,
         )
+        # Best-effort figure persistence (thumbnails for chat citations).
+        try:
+            self._persist_figures(file_path, filename, content_hash, content_type)
+        except Exception:  # noqa: BLE001
+            logger.debug("Figure persistence skipped for %s", filename)
         return IngestionResult(
             content_hash=content_hash,
             status="ready",
@@ -314,7 +331,31 @@ class IngestionService:
         if content_type == "pdf":
             # One PdfReader traversal for text + units + page count.
             text, pdf_units, page_count = parse_pdf_document(file_path)
+            # Strip recurring headers/footers before anything else: cleaner
+            # text for the smart gate, vision fallback, and embeddings.
+            page_texts = [u.text for u in pdf_units]
+            stripped = dedup_furniture(page_texts)
+            if any(s != o for s, o in zip(stripped, page_texts, strict=False)):
+                pdf_units = [
+                    type(u)(text=s, page=u.page) for u, s in zip(pdf_units, stripped, strict=False)
+                ]
+                text = "\n\n".join(s for s in stripped if s.strip()) or text
             prebuilt_units = [(u.text, u.page) for u in pdf_units]
+            # Smart gate: text-layer PDFs skip vision entirely. Vision runs
+            # only when the PDF actually needs it (scanned / image-heavy).
+            if len(text.strip()) >= threshold and not pdf_needs_vision_ocr(
+                file_path,
+                text,
+                min_total_chars=self._config.pdf_needs_ocr_min_total_chars,
+                min_chars_per_page=self._config.pdf_needs_ocr_min_chars_per_page,
+            ):
+                return text, page_count, False, prebuilt_units
+            if len(text.strip()) >= threshold and not self._needs_figure_pass(file_path, text):
+                return text, page_count, False, prebuilt_units
+        elif content_type in IMAGE_CONTENT_TYPES:
+            # Images have no text layer: always go through vision.
+            text, page_count = "", None
+            prebuilt_units = None
         else:
             text = extract_text(file_path, content_type)
             page_count = None
@@ -341,6 +382,25 @@ class IngestionService:
             prebuilt_units = None
 
         return text, page_count, ocr_used, prebuilt_units
+
+    def _needs_figure_pass(self, file_path: str, text: str) -> bool:
+        """Return True if figure descriptions are enabled and the PDF is image-heavy.
+
+        Even when the text layer is sufficient, image-heavy PDFs get a vision
+        pass so diagrams/figures are described and searchable. Respects
+        ``OCR_FIGURE_DESCRIPTION``; never raises.
+        """
+        try:
+            if not self._config.ocr_figure_description:
+                return False
+            return pdf_needs_vision_ocr(
+                file_path,
+                text,
+                min_total_chars=self._config.pdf_needs_ocr_min_total_chars,
+                min_chars_per_page=self._config.pdf_needs_ocr_min_chars_per_page,
+            )
+        except Exception:  # noqa: BLE001
+            return False
 
     def _build_units(
         self,
@@ -374,7 +434,7 @@ class IngestionService:
         return nonempty or ([(text, None)] if text.strip() else [])
 
     def _run_ocr_fallback(self, file_path: str, content_type: str) -> str | None:
-        """Run the type-appropriate OCR fallback.
+        """Run the type-appropriate vision fallback.
 
         Returns the OCR'd text (possibly empty), or ``None`` if OCR is not
         applicable for this content type (no images to OCR). Logs and swallows
@@ -382,24 +442,108 @@ class IngestionService:
         """
         try:
             if content_type == "pdf":
-                logger.info("Text below threshold, attempting PDF OCR")
+                logger.info("Text below threshold, attempting PDF vision OCR")
                 return self._ocr.ocr_pdf(file_path, OCR_PROMPT_TEXT)
             if content_type == "docx":
                 images = extract_docx_images(file_path)
                 if not images:
                     return None
-                logger.info("Text below threshold, attempting DOCX OCR (%d images)", len(images))
+                logger.info("Text below threshold, attempting DOCX vision (%d images)", len(images))
                 return self._ocr.ocr_images(images, OCR_PROMPT_TEXT)
             if content_type == "pptx":
                 images = extract_pptx_images(file_path)
                 if not images:
                     return None
-                logger.info("Text below threshold, attempting PPTX OCR (%d images)", len(images))
+                logger.info("Text below threshold, attempting PPTX vision (%d images)", len(images))
                 return self._ocr.ocr_images(images, OCR_PROMPT_TEXT)
+            if content_type in IMAGE_CONTENT_TYPES:
+                from PIL import Image
+
+                logger.info("Image source, attempting vision OCR")
+                try:
+                    img = Image.open(file_path).convert("RGB")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Could not open image %s: %s", file_path, exc)
+                    return ""
+                text = self._ocr.ocr_image(img, OCR_PROMPT_TEXT)
+                figure = ""
+                try:
+                    if self._config.ocr_figure_description:
+                        figure = self._ocr.describe_figure(img)
+                except Exception:  # noqa: BLE001
+                    figure = ""
+                parts = [
+                    p for p in (text, f"[Figure Description]\n{figure}" if figure else "") if p
+                ]
+                return "\n\n".join(parts)
         except Exception as exc:  # noqa: BLE001
-            logger.error("OCR fallback failed for %s: %s", file_path, exc)
+            logger.error("Vision fallback failed for %s: %s", file_path, exc)
             return ""
         return None
+
+    def _persist_figures(
+        self, file_path: str, filename: str, content_hash: str, content_type: str
+    ) -> None:
+        """Best-effort figure persistence for chat thumbnails (+ Mermaid).
+
+        - Image sources: the upload IS the figure.
+        - DOCX/PPTX: up to 2 embedded images with vision captions.
+        Never raises.
+        """
+        from src.services.figure_store import save_figure
+
+        data_dir = self._config.data_dir
+        images: list[Any] = []
+        label_prefix = filename
+        if content_type in IMAGE_CONTENT_TYPES:
+            try:
+                from PIL import Image
+
+                images = [Image.open(file_path).convert("RGB")]
+            except Exception:  # noqa: BLE001
+                return
+        elif content_type == "docx":
+            images = extract_docx_images(file_path)[:2]
+        elif content_type == "pptx":
+            images = extract_pptx_images(file_path)[:2]
+        if not images:
+            return
+        for i, img in enumerate(images, start=1):
+            caption = ""
+            try:
+                if self._config.ocr_figure_description and self._ocr.is_available():
+                    caption = self._ocr.describe_figure(img)
+            except Exception:  # noqa: BLE001
+                caption = ""
+            mermaid, dtype, conf = "", "", 0
+            try:
+                if not self._config.ai_mock:
+                    from src.services.diagram import convert_figure
+
+                    result = convert_figure(
+                        img,
+                        min_confidence=self._config.diagram_min_confidence,
+                    )
+                    if result.convertible:
+                        mermaid, dtype, conf = (
+                            result.mermaid,
+                            result.diagram_type,
+                            result.confidence,
+                        )
+                        if not caption and result.description:
+                            caption = result.description
+            except Exception:  # noqa: BLE001
+                mermaid, dtype, conf = "", "", 0
+            save_figure(
+                content_hash,
+                img,
+                caption=caption,
+                label=f"{label_prefix} — figure {i}",
+                data_dir=data_dir,
+                mermaid=mermaid,
+                diagram_type=dtype,
+                confidence=conf,
+            )
 
 
 _service: IngestionService | None = None

@@ -1,15 +1,16 @@
-"""Document parser — text extraction from PDF/DOCX/PPTX/TXT/MD.
+"""Document parser — text extraction from PDF/DOCX/PPTX/TXT/MD/images.
 
 Each parser reads a file path and returns extracted text. The dispatcher
 ``extract_text(path, content_type)`` routes by type. When text extraction
 yields little/no text (e.g. scanned PDFs), the ingestion pipeline falls back
-to GLM-OCR (see ``ocr_service.py``).
+to vision understanding via ``glm-5.3-flash`` (see ``ocr_service.py``).
 
 Supported types and libraries:
 - pdf:  ``pypdf``
 - docx: ``python-docx``
 - pptx: ``python-pptx``
 - txt/md: plain read
+- png/jpg/jpeg: images (no text layer; always go through vision OCR)
 """
 
 from __future__ import annotations
@@ -23,14 +24,19 @@ from src.services.exceptions import IngestionError
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
+SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md", ".png", ".jpg", ".jpeg"}
 TYPE_TO_EXTENSIONS = {
     "pdf": ".pdf",
     "docx": ".docx",
     "pptx": ".pptx",
     "txt": ".txt",
     "md": ".md",
+    "png": ".png",
+    "jpg": ".jpg",
+    "jpeg": ".jpeg",
 }
+
+IMAGE_CONTENT_TYPES = {"png", "jpg", "jpeg"}
 
 # Resource bounds for ZIP-based Office media extraction (zip-bomb protection).
 # Checked against ZIP metadata *before* member data is read into memory.
@@ -71,6 +77,9 @@ def extract_text(path: str, content_type: str) -> str:
         return parse_pptx(path)
     if content_type in ("txt", "md"):
         return parse_text_file(path)
+    if content_type in IMAGE_CONTENT_TYPES:
+        # Images have no text layer: ingestion routes them straight to vision.
+        return ""
     raise IngestionError(f"Unsupported content type: {content_type!r}")
 
 
@@ -162,6 +171,8 @@ def extract_units(path: str, content_type: str) -> tuple[list[TextUnit], int | N
         return [TextUnit(text=parse_docx(path), page=None)], None
     if content_type in ("txt", "md"):
         return [TextUnit(text=parse_text_file(path), page=None)], None
+    if content_type in IMAGE_CONTENT_TYPES:
+        return [], None
     raise IngestionError(f"Unsupported content type: {content_type!r}")
 
 
@@ -356,6 +367,9 @@ _MAGIC_BYTES: dict[str, bytes] = {
     "pdf": b"%PDF",
     "docx": b"PK\x03\x04",
     "pptx": b"PK\x03\x04",
+    "png": b"\x89PNG",
+    "jpg": b"\xff\xd8\xff",
+    "jpeg": b"\xff\xd8\xff",
     # txt/md have no magic bytes — validated as plain text (no null bytes).
 }
 

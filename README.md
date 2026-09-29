@@ -219,6 +219,64 @@ python app.py
 
 Open http://localhost:5000 in your browser.
 
+## Starting from scratch (Windows 11)
+
+If app state gets tangled (stale vectors, orphaned media, or a half-migrated
+database), reset everything and start clean. Stop the app first (Ctrl+C in
+its terminal), then:
+
+### 1. Delete runtime data
+
+```powershell
+Remove-Item -LiteralPath "data\chroma_db", "data\audio", "data\video", "data\voice", "data\figures" -Recurse -Force
+```
+
+This wipes the local vector store, generated audio/video/voice files, and
+figure thumbnails. Keep `data/` itself. Do NOT delete `migrations/`,
+`venv/`, `src/`, `tests/`, or `.env`.
+
+### 2. Rebuild the database
+
+Step 4b above is idempotent — re-run it to drop and recreate
+`notebook_project` from scratch — then re-apply the schema:
+
+```powershell
+psql -U postgres -d notebook_project -f init_db.sql
+```
+
+> Do not just re-run `init_db.sql` on the existing database: it drops the
+> app tables but keeps the Alembic stamp table, so an old version row
+> survives next to the new one and Alembic errors on the duplicates. Drop +
+> recreate (step 4b) avoids this entirely. If you must reuse the same
+> database, run `DELETE FROM alembic_version;` before re-running the script.
+
+### 3. Refresh the admin and verify
+
+```powershell
+flask seed-admin
+flask db current
+```
+
+`flask db current` should report the latest migration (`0006_source_digest`
+at time of writing). Make sure `ADMIN_PASSWORD` in `.env` is set to a real
+password before seeding — otherwise the `change-me` placeholder is applied.
+
+Also confirm your `.env` has the current keys (compare against
+`.env.example`): `OLLAMA_VISION_MODEL`, `OLLAMA_NUM_CTX`, `RAG_MAX_TOP_K`,
+`RAG_MAX_CONTEXT_CHARS`, `RAG_DIGEST_MAX_CHARS`, and `DIAGRAM_*`. The app
+loads with stale keys, but retrieval falls back to small defaults.
+
+### 4. Start the app and re-upload
+
+```powershell
+python app.py
+```
+
+Check http://localhost:5000/health, sign in, and re-upload your sources.
+The first summary job per notebook takes a few extra minutes building the
+cached full-coverage digests (one LLM pass per file section, once ever —
+then shared across notebooks).
+
 ## Testing
 
 ```powershell

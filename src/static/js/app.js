@@ -69,7 +69,7 @@
   });
 
   function addFiles(fileList) {
-    var allowed = [".pdf", ".docx", ".pptx", ".txt", ".md"];
+    var allowed = [".pdf", ".docx", ".pptx", ".txt", ".md", ".png", ".jpg", ".jpeg"];
     for (var i = 0; i < fileList.length; i++) {
       var f = fileList[i];
       var ext = "." + f.name.split(".").pop().toLowerCase();
@@ -225,7 +225,9 @@
             }
             if (data.done) {
               chatSend.disabled = false;
-              ChatUI.appendSources(assistantDiv, data.sources);
+              ChatUI.appendSources(
+                assistantDiv, data.sources, data.source_total, data.coverage_ratio
+              );
             }
             if (data.error) {
               chatSend.disabled = false;

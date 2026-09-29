@@ -73,12 +73,18 @@ class TestGetSummary:
         self, client: object, app: object, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Corrupt stored JSON must not 500 the summary endpoint."""
+        from src.services.summary_service import compute_content_signature
+
         nb_id = _create_notebook_with_source(client, app, monkeypatch, "sumroute5")
         with app.app_context():
             nb = db.session.query(Notebook).filter_by(id=nb_id).first()
             assert nb is not None
             nb.summary = "Existing summary."
             nb.suggested_questions = "{corrupt"
+            # Pin the signature to the current sources so the background
+            # summary job (triggered at notebook creation) deterministically
+            # skips regeneration regardless of thread timing.
+            nb.content_signature = compute_content_signature(["s" * 64])
             db.session.commit()
         res = client.get(f"/notebooks/{nb_id}/summary")
         assert res.status_code == 200

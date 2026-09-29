@@ -92,9 +92,17 @@ def launch_audio_job(
 
     Returns the job id. ``generation`` should be the notebook's current
     ``audio_generation`` so a superseded job's result is discarded.
+    Singleflight: a second launch for the same notebook while one is
+    running returns the existing job id without starting a duplicate.
     """
 
     jid = job_id or _new_job_id()
+    from src.services.progress_tracker import claim_job, fail_job, finish_job
+
+    task_key = f"audio:{notebook_id}"
+    if not claim_job(task_key, label="Audio Overview", notebook_id=notebook_id):
+        logger.info("Audio job already running for notebook %d; skipping duplicate", notebook_id)
+        return jid
 
     def _run() -> None:
         try:
@@ -111,14 +119,20 @@ def launch_audio_job(
                 )
                 if result is None:
                     logger.error("Audio job returned None for notebook %d", notebook_id)
+                    fail_job(task_key, error="Generation crashed unexpectedly.")
                 else:
                     logger.info(
                         "Audio job finished: notebook=%d status=%s",
                         notebook_id,
                         result.status,
                     )
+                    if result.status == "ready":
+                        finish_job(task_key, label="Audio Overview ready")
+                    else:
+                        fail_job(task_key, error=result.error or result.status)
         except Exception:
             logger.exception("Audio job crashed for notebook %d", notebook_id)
+            fail_job(task_key, error="Generation crashed unexpectedly.")
             _mark_crashed(notebook_id, app, "audio", generation)
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -170,9 +184,16 @@ def launch_video_job(
 
     Returns the job id. ``generation`` should be the notebook's current
     ``video_generation`` so a superseded job's result is discarded.
+    Singleflight: duplicates while running are skipped.
     """
 
     jid = job_id or _new_job_id()
+    from src.services.progress_tracker import claim_job, fail_job, finish_job
+
+    task_key = f"video:{notebook_id}"
+    if not claim_job(task_key, label="Video Overview", notebook_id=notebook_id):
+        logger.info("Video job already running for notebook %d; skipping duplicate", notebook_id)
+        return jid
 
     def _run() -> None:
         try:
@@ -184,14 +205,20 @@ def launch_video_job(
                 )
                 if result is None:
                     logger.error("Video job returned None for notebook %d", notebook_id)
+                    fail_job(task_key, error="Generation crashed unexpectedly.")
                 else:
                     logger.info(
                         "Video job finished: notebook=%d status=%s",
                         notebook_id,
                         result.status,
                     )
+                    if result.status == "ready":
+                        finish_job(task_key, label="Video Overview ready")
+                    else:
+                        fail_job(task_key, error=result.error or result.status)
         except Exception:
             logger.exception("Video job crashed for notebook %d", notebook_id)
+            fail_job(task_key, error="Generation crashed unexpectedly.")
             _mark_crashed(notebook_id, app, "video", generation)
 
     thread = threading.Thread(target=_run, daemon=True)

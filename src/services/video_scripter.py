@@ -19,6 +19,7 @@ from typing import Any
 from src.extensions import db
 from src.models import Notebook, Source
 from src.repositories import content_registry_repo
+from src.services.llm_json import extract_json
 from src.services.ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
@@ -73,17 +74,25 @@ def _build_duration_instruction(min_sec: int, max_sec: int, total_chars: int) ->
 
 
 def parse_video_response(raw: str) -> list[dict[str, Any]]:
-    """Parse the LLM's JSON response into a list of slide dicts."""
+    """Parse the LLM's JSON response into a list of slide dicts.
+
+    Uses the shared ``llm_json`` helper so trailing prose after the JSON no
+    longer invalidates the whole response.
+    """
     if not raw:
         return []
     cleaned = _strip_markdown_fences(raw)
-    try:
-        data = json.loads(cleaned)
-        slides = data.get("slides", [])
-        if not isinstance(slides, list):
-            return []
-    except (json.JSONDecodeError, TypeError):
+    data = extract_json(cleaned)
+    if not isinstance(data, dict):
+        try:
+            data = json.loads(cleaned)
+        except (json.JSONDecodeError, TypeError):
+            data = None
+    if not isinstance(data, dict):
         logger.warning("Failed to parse video JSON: %.200s...", cleaned[:200])
+        return []
+    slides = data.get("slides", [])
+    if not isinstance(slides, list):
         return []
 
     result: list[dict[str, Any]] = []
@@ -132,6 +141,23 @@ class VideoScripter:
         if self._client._mock:  # noqa: SLF001
             return self._mock_script(notebook.id, source_texts)
 
+        # Background thread: make sure full-coverage digests exist, then use
+        # them alongside the raw texts so the whole notebook is represented.
+        try:
+            from src.services.section_digest import (
+                ensure_notebook_digests,
+                notebook_digest_text,
+            )
+
+            ensure_notebook_digests(notebook.id, self._config)
+            digest_block = (
+                notebook_digest_text(notebook.id, self._config.rag_digest_max_chars, self._config)
+                if self._config.rag_summary_map
+                else ""
+            )
+        except Exception:  # noqa: BLE001
+            digest_block = ""
+
         try:
             total_chars = selection.total_chars
             duration_instruction = _build_duration_instruction(
@@ -145,6 +171,7 @@ class VideoScripter:
 
             user_content = (
                 "Create a narrated video presentation based on these source texts:\n\n"
+                + (digest_block + "\n\n" if digest_block else "")
                 + "\n\n".join(source_texts)
             )
             if topic:

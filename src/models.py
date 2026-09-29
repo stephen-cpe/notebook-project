@@ -62,6 +62,7 @@ class User(db.Model):  # type: ignore[name-defined, misc]
     audio_speaker_b: Mapped[str] = mapped_column(String(32), nullable=False, default="Andrew")
     video_speaker: Mapped[str] = mapped_column(String(32), nullable=False, default="Ava")
     voice_speaker: Mapped[str] = mapped_column(String(32), nullable=False, default="Ava")
+    difficulty: Mapped[str] = mapped_column(String(16), nullable=False, default="Normal")
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC), nullable=False)
 
     notebooks: Mapped[list[Notebook]] = relationship(
@@ -182,6 +183,8 @@ class ContentRegistry(db.Model):  # type: ignore[name-defined, misc]
     embedding_fingerprint: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     extracted_text: Mapped[str] = mapped_column(Text, nullable=False)
     char_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    section_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    digest_pipeline: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC), nullable=False)
 
     def __repr__(self) -> str:

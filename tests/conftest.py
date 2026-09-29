@@ -78,6 +78,17 @@ def app() -> Generator[object]:
     reset_vector_store()
     get_vector_store().reset()
 
+    # Reset the in-memory background-task tracker (process-global
+    # singleflight state; without this, a mocked-Thread launch in one test
+    # leaves audio:1/video:1 "running" and the next test's real launch is
+    # skipped as a duplicate).
+    try:
+        from src.services.progress_tracker import reset_tracker
+
+        reset_tracker()
+    except ImportError:
+        pass
+
     # Use a temp file SQLite DB so all threads/contexts share one database.
     tmp_dir = tempfile.mkdtemp(prefix="nbtest_")
     tmp_db = os.path.join(tmp_dir, "test.db")

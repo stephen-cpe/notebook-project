@@ -97,7 +97,7 @@ def build_prompt(
 
 
 class OllamaClient:
-    """Ollama Cloud chat client with mock support + retry."""
+    """Ollama Cloud chat client with mock support + retry + vision."""
 
     def __init__(self, config: Config | None = None) -> None:
         if config is None:
@@ -107,11 +107,13 @@ class OllamaClient:
 
         self._config = config
         self.model: str = config.chat_model
+        self.vision_model: str = config.vision_model
         self._mock: bool = bool(config.ai_mock)
         self.enable_thinking: bool = bool(config.enable_thinking)
         self._base_url: str = config.ollama_cloud_base_url.rstrip("/")
         self._api_key: str = config.ollama_cloud_api_key
         self._timeout: int = config.ollama_timeout
+        self._vision_timeout: int = config.vision_timeout
 
     # ------------------------------------------------------------------
     # Public API
@@ -136,6 +138,59 @@ class OllamaClient:
             yield from self._mock_stream(messages)
             return
         yield from self._stream_with_retry(messages)
+
+    def chat_with_images(
+        self,
+        prompt: str,
+        images_b64: list[str],
+        model: str | None = None,
+    ) -> str:
+        """Send a vision prompt with base64 images via ``/api/chat``.
+
+        ``images_b64`` are base64-encoded image bytes (no data-URL prefix).
+        In mock mode returns a deterministic canned description (offline).
+        """
+        target = model or self.vision_model
+        if self._mock:
+            key = prompt + "|" + "|".join(s[:32] for s in images_b64)
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+            return (
+                f"[mock vision {digest}] The image contains document text "
+                f"extracted via mock vision ({prompt[:40]})."
+            )
+        url = f"{self._base_url}/api/chat"
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        payload: dict[str, Any] = {
+            "model": target,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": images_b64,
+                }
+            ],
+            "stream": False,
+        }
+        try:
+            resp = requests.post(url, json=payload, headers=headers, timeout=self._vision_timeout)
+            resp.raise_for_status()
+        except requests.Timeout as exc:
+            raise AITimeoutError(f"Ollama vision timed out after {self._vision_timeout}s") from exc
+        except requests.ConnectionError as exc:
+            raise ConnectionError(f"Ollama Cloud unreachable: {exc}") from exc
+        except requests.HTTPError as exc:
+            status = resp.status_code
+            if 400 <= status < 500:
+                raise AIModelUnavailableError(
+                    f"Ollama Cloud rejected the vision request (HTTP {status}). "
+                    "Check OLLAMA_CLOUD_API_KEY and OLLAMA_VISION_MODEL access."
+                ) from exc
+            raise ConnectionError(f"Ollama Cloud HTTP {status}: {exc}") from exc
+        data = resp.json()
+        content = data.get("message", {}).get("content", "")
+        return extract_final_answer(content)
 
     # ------------------------------------------------------------------
     # Retry wrappers

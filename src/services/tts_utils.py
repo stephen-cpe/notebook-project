@@ -114,6 +114,15 @@ def synthesize_utterance(text: str, voice: str, output_path: str, mock: bool = F
     except Exception as exc:  # noqa: BLE001
         logger.error("TTS failed for voice %s: %s", voice, exc)
         return False
+    finally:
+        # edge-tts leaves async generators alive across asyncio.run() calls;
+        # without an explicit shutdown the process leaks file descriptors
+        # (one warning per utterance, eventual "too many open files" on
+        # long audio/video jobs).
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            asyncio.run(_shutdown_asyncgens())
 
 
 def _mock_synthesize(output_path: str) -> bool:
@@ -134,3 +143,10 @@ async def _edge_tts_synthesize(text: str, voice: str, output_path: str) -> None:
 
     communicate = edge_tts.Communicate(text, voice)
     await communicate.save(output_path)
+
+
+async def _shutdown_asyncgens() -> None:
+    """Shut down dangling async generators (FD-leak fix)."""
+    import asyncio
+
+    await asyncio.get_event_loop().shutdown_asyncgens()

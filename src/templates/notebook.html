@@ -35,9 +35,9 @@
     <div id="drop-zone" class="border border-secondary border-dashed rounded p-3 text-center mb-2" style="cursor: pointer;">
       <i class="bi bi-cloud-arrow-up fs-3 text-secondary"></i>
       <p class="small text-secondary mb-0">Drag files here or click to select</p>
-      <p class="small text-secondary">PDF, DOCX, PPTX, TXT, MD</p>
+      <p class="small text-secondary">PDF, DOCX, PPTX, TXT, MD, PNG, JPG</p>
       <input type="file" id="file-input" class="d-none" name="files"
-             accept=".pdf,.docx,.pptx,.txt,.md" multiple>
+             accept=".pdf,.docx,.pptx,.txt,.md,.png,.jpg,.jpeg" multiple>
     </div>
     <div id="upload-progress" class="mb-2"></div>
     <button type="button" id="upload-btn" class="btn btn-info btn-sm w-100" disabled>
@@ -107,6 +107,9 @@
     <h5 class="mb-3">Notebook</h5>
     <p class="small text-secondary">{{ notebook.description or 'No description' }}</p>
     <p class="small">Sources: {{ sources|length }}</p>
+    <a class="btn btn-outline-secondary btn-sm w-100 mb-2" href="{{ url_for('export.export_notebook', notebook_id=notebook.id) }}">
+      <i class="bi bi-file-earmark-pdf"></i> Export PDF
+    </a>
     <hr class="border-secondary">
     <h6 class="small text-secondary">Overview</h6>
     <input type="text" id="overview-topic" class="form-control form-control-sm mb-2" placeholder="Focus topic (optional)">

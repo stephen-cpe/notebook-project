@@ -16,6 +16,7 @@ import logging
 import re
 
 from src.models import Notebook
+from src.services.llm_json import extract_json
 from src.services.ollama_client import get_ollama_client
 
 logger = logging.getLogger(__name__)
@@ -86,11 +87,19 @@ def parse_dialogue_response(raw: str) -> list[dict[str, str]]:
         return []
     cleaned = _strip_markdown_fences(raw)
 
-    try:
-        data = json.loads(cleaned)
-        return _build_utterances(data.get("dialogue", []))
-    except (json.JSONDecodeError, TypeError):
-        pass
+    data = extract_json(cleaned)
+    if isinstance(data, dict):
+        try:
+            return _build_utterances(data.get("dialogue", []))
+        except (TypeError, AttributeError):
+            pass
+    else:
+        try:
+            legacy = json.loads(cleaned)
+            if isinstance(legacy, dict):
+                return _build_utterances(legacy.get("dialogue", []))
+        except (json.JSONDecodeError, TypeError):
+            pass
 
     result = _extract_utterances_structural(cleaned)
     if result:
@@ -186,6 +195,23 @@ class AudioScripter:
         if self._client._mock:  # noqa: SLF001
             return self._mock_dialogue(notebook.id, source_texts)
 
+        # Background thread: make sure full-coverage digests exist, then use
+        # them alongside the raw texts so the whole notebook is represented.
+        try:
+            from src.services.section_digest import (
+                ensure_notebook_digests,
+                notebook_digest_text,
+            )
+
+            ensure_notebook_digests(notebook.id, self._config)
+            digest_block = (
+                notebook_digest_text(notebook.id, self._config.rag_digest_max_chars, self._config)
+                if self._config.rag_summary_map
+                else ""
+            )
+        except Exception:  # noqa: BLE001
+            digest_block = ""
+
         try:
             total_chars = selection.total_chars
             duration_instruction = _build_duration_instruction(
@@ -199,6 +225,7 @@ class AudioScripter:
 
             user_content = (
                 "Write a two-host podcast dialogue based on these source texts:\n\n"
+                + (digest_block + "\n\n" if digest_block else "")
                 + "\n\n".join(source_texts)
             )
             if topic:

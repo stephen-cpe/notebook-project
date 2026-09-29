@@ -286,6 +286,46 @@ def source_text(notebook_id: int, source_id: int) -> tuple[Response, int]:
     return jsonify(text=entry.extracted_text, char_count=entry.char_count), 200
 
 
+@sources_bp.get("/notebooks/<int:notebook_id>/figures/<content_hash>/<filename>")
+@login_required
+def figure_file(notebook_id: int, content_hash: str, filename: str) -> Response:
+    """Serve a stored figure thumbnail (owner-scoped, traversal-guarded)."""
+    from pathlib import Path
+
+    from flask import current_app, send_file
+
+    notebook = require_owner(notebook_id)
+    _ = notebook
+    if (
+        not content_hash
+        or "/" in content_hash
+        or "\\" in content_hash
+        or ".." in content_hash
+        or "/" in filename
+        or "\\" in filename
+        or ".." in filename
+    ):
+        abort(404)
+    # Only serve figures for hashes belonging to this notebook.
+    from src.repositories import source_repo as _source_repo
+
+    if _source_repo.get_by_notebook_and_hash(notebook_id, content_hash) is None:
+        abort(404)
+    cfg: Config = current_app.config["NOTEBOOK_CONFIG"]
+    safe = Path(filename).name
+    fpath = Path(cfg.data_dir) / "figures" / content_hash / safe
+    try:
+        resolved = fpath.resolve()
+        root = (Path(cfg.data_dir) / "figures").resolve()
+        if root not in resolved.parents and resolved != root:
+            abort(404)
+    except Exception:  # noqa: BLE001
+        abort(404)
+    if not resolved.is_file():
+        abort(404)
+    return send_file(resolved, mimetype="image/png")
+
+
 @sources_bp.patch("/notebooks/<int:notebook_id>/sources/<int:source_id>/rename")
 @login_required
 def rename_source(notebook_id: int, source_id: int) -> tuple[Response, int]:

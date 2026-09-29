@@ -33,6 +33,7 @@ CREATE TABLE users (
     audio_speaker_b VARCHAR(32)   NOT NULL DEFAULT 'Andrew',
     video_speaker VARCHAR(32)     NOT NULL DEFAULT 'Ava',
     voice_speaker VARCHAR(32)     NOT NULL DEFAULT 'Ava',
+    difficulty VARCHAR(16)        NOT NULL DEFAULT 'Normal',
     created_at    TIMESTAMP       NOT NULL DEFAULT NOW()
 );
 
@@ -108,6 +109,8 @@ CREATE TABLE content_registry (
     embedding_fingerprint VARCHAR(16) NOT NULL DEFAULT '',
     extracted_text     TEXT        NOT NULL,
     char_count         INTEGER     NOT NULL DEFAULT 0,
+    section_digest     TEXT,
+    digest_pipeline    VARCHAR(16),
     created_at         TIMESTAMP   NOT NULL DEFAULT NOW()
 );
 
@@ -162,7 +165,7 @@ CREATE TABLE IF NOT EXISTS alembic_version (
 );
 
 INSERT INTO alembic_version (version_num)
-VALUES ('0004_media_generations')
+VALUES ('0006_source_digest')
 ON CONFLICT (version_num) DO NOTHING;
 
 COMMIT;

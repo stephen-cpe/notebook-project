@@ -653,3 +653,54 @@ code {
   background: var(--bg-tertiary);
   margin-right: auto;
 }
+
+/* Collapsible citation block under each assistant answer. The answer stays
+ * clean: one toggle line ("Sources (N of M) · X% read"); cited passages
+ * grouped by file live inside the expandable panel. */
+.cite-wrap {
+  max-width: 100%;
+}
+
+.cite-toggle {
+  color: var(--text-secondary, #9aa4b2);
+  font-size: 0.8rem;
+}
+
+.cite-toggle:hover {
+  color: var(--info, #0dcaf0);
+}
+
+.cite-panel {
+  border-left: 2px solid var(--border, #2a3142);
+  padding-left: 0.5rem;
+}
+
+.cite-group {
+  margin-bottom: 0.25rem;
+  word-wrap: break-word;
+}
+
+/* Header tasks bell dropdown: compact notification feed for background
+ * Audio/Video Overview jobs. */
+.tasks-menu {
+  width: 320px;
+  max-width: 90vw;
+}
+
+.tasks-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.tasks-item {
+  color: var(--text, #e0e6f0);
+}
+
+.tasks-item:hover {
+  background: rgba(13, 202, 240, 0.08);
+}
+
+.tasks-item-unread {
+  background: rgba(13, 202, 240, 0.12);
+  border-left: 3px solid var(--info, #0dcaf0);
+}

@@ -290,7 +290,9 @@ class TestVideoScripter:
             # Mock the client's chat method
             with patch.object(scripter._client, "chat", return_value='{"slides": []}') as mock_chat:
                 scripter.write_script(nb)
-                mock_chat.assert_called_once()
+                # Digest ensure (background full-coverage build) + script call.
+                assert mock_chat.call_count == 2
+                assert "narrated video presentation" in str(mock_chat.call_args)
 
     def test_real_mode_handles_ollama_error(
         self, app: object, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

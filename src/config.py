@@ -75,7 +75,12 @@ class Config:
     )
     hf_token: str = field(default_factory=lambda: os.getenv("HF_TOKEN", ""))
 
-    # OCR (HuggingFace GLM-OCR, opt-in fallback)
+    # OCR / vision (Ollama glm-5.3-flash, consolidated vision understanding)
+    # The old HuggingFace GLM-OCR path has been replaced: all image OCR,
+    # table extraction, and figure description now use a single natively
+    # multimodal vision model via the Ollama Cloud chat API. ``ocr_provider``
+    # / ``ocr_inference_endpoint`` are kept as deprecated aliases so old
+    # imports/env files keep working; new code uses ``vision_model``.
     ocr_fallback_enabled: bool = field(default_factory=lambda: _bool("OCR_FALLBACK_ENABLED", True))
     ocr_text_threshold: int = field(default_factory=lambda: _int("OCR_TEXT_THRESHOLD", 200))
     ocr_max_image_dimension: int = field(
@@ -84,6 +89,21 @@ class Config:
     ocr_max_pages: int = field(default_factory=lambda: _int("OCR_MAX_PAGES", 30))
     ocr_dpi: int = field(default_factory=lambda: _int("OCR_DPI", 150))
     poppler_path: str = field(default_factory=lambda: os.getenv("POPPLER_PATH", ""))
+    vision_model: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_VISION_MODEL", "glm-5.3-flash:cloud")
+    )
+    vision_timeout: int = field(default_factory=lambda: _int("OLLAMA_VISION_TIMEOUT", 300))
+    pdf_needs_ocr_min_total_chars: int = field(
+        default_factory=lambda: _int("PDF_NEEDS_OCR_MIN_TOTAL_CHARS", 1000)
+    )
+    pdf_needs_ocr_min_chars_per_page: int = field(
+        default_factory=lambda: _int("PDF_NEEDS_OCR_MIN_CHARS_PER_PAGE", 300)
+    )
+    ocr_figure_description: bool = field(
+        default_factory=lambda: _bool("OCR_FIGURE_DESCRIPTION", True)
+    )
+    # Deprecated: kept so old .env files/tests keep working. The vision
+    # model above is used for all OCR regardless of this value.
     # Provider: "local" (default, transformers on CPU/GPU) or "hf_inference"
     # (hosted HF Inference API — no local weights, per-call network latency).
     ocr_provider: str = field(
@@ -94,6 +114,36 @@ class Config:
     ocr_inference_endpoint: str = field(
         default_factory=lambda: os.getenv("OCR_INFERENCE_ENDPOINT", "").strip()
     )
+
+    # RAG budget (context-window-derived retrieval, ported from study-and-learn).
+    # Sized for a 256K-window chat model (gemma4:31b-cloud): ~839K usable
+    # chars after the 20% reserve, so the ceilings below — not hardcoded
+    # top_k values — are what bound each prompt.
+    ollama_num_ctx: int = field(default_factory=lambda: _int("OLLAMA_NUM_CTX", 262144))
+    rag_top_k: int = field(default_factory=lambda: _int("RAG_TOP_K", 20))
+    rag_max_top_k: int = field(default_factory=lambda: _int("RAG_MAX_TOP_K", 200))
+    rag_max_context_chars: int = field(
+        default_factory=lambda: _int("RAG_MAX_CONTEXT_CHARS", 700000)
+    )
+    rag_max_citations: int = field(default_factory=lambda: _int("RAG_MAX_CITATIONS", 12))
+    rag_summary_map: bool = field(default_factory=lambda: _bool("RAG_SUMMARY_MAP", True))
+    # Full-coverage digest sizing (map-reduce over source sections).
+    rag_digest_max_chars: int = field(default_factory=lambda: _int("RAG_DIGEST_MAX_CHARS", 80000))
+    rag_map_section_chars: int = field(default_factory=lambda: _int("RAG_MAP_SECTION_CHARS", 6000))
+    rag_map_max_sections: int = field(default_factory=lambda: _int("RAG_MAP_MAX_SECTIONS", 80))
+
+    # Suggested questions: dedup + opt-in web augmentation (fail-closed)
+    web_search_enabled: bool = field(default_factory=lambda: _bool("WEB_SEARCH_ENABLED", False))
+    web_search_max_results: int = field(default_factory=lambda: _int("WEB_SEARCH_MAX_RESULTS", 5))
+    web_search_timeout: int = field(default_factory=lambda: _int("WEB_SEARCH_TIMEOUT", 30))
+    web_search_synth_model: str = field(
+        default_factory=lambda: os.getenv("WEB_SEARCH_SYNTH_MODEL", "gpt-oss:20b-cloud")
+    )
+
+    # Diagrams → Mermaid (optional figure reinterpretation via vision model)
+    diagram_to_mermaid: bool = field(default_factory=lambda: _bool("DIAGRAM_TO_MERMAID", True))
+    diagram_min_confidence: int = field(default_factory=lambda: _int("DIAGRAM_MIN_CONFIDENCE", 80))
+    diagram_verify: bool = field(default_factory=lambda: _bool("DIAGRAM_VERIFY", True))
 
     # Vector store
     chroma_db: str = field(default_factory=lambda: os.getenv("CHROMA_DB", "local"))
@@ -140,7 +190,7 @@ class Config:
         default_factory=lambda: _int("OVERVIEW_MAX_DURATION_SECONDS", 480)
     )
     overview_max_context_chars: int = field(
-        default_factory=lambda: _int("OVERVIEW_MAX_CONTEXT_CHARS", 30000)
+        default_factory=lambda: _int("OVERVIEW_MAX_CONTEXT_CHARS", 150000)
     )
 
     # Admin seed (first run only)
@@ -203,6 +253,24 @@ class Config:
             "poppler_path": self.poppler_path,
             "ocr_provider": self.ocr_provider,
             "ocr_inference_endpoint": _redact_secret(self.ocr_inference_endpoint),
+            "vision_model": self.vision_model,
+            "vision_timeout": self.vision_timeout,
+            "pdf_needs_ocr_min_total_chars": self.pdf_needs_ocr_min_total_chars,
+            "pdf_needs_ocr_min_chars_per_page": self.pdf_needs_ocr_min_chars_per_page,
+            "ocr_figure_description": self.ocr_figure_description,
+            "ollama_num_ctx": self.ollama_num_ctx,
+            "rag_top_k": self.rag_top_k,
+            "rag_max_top_k": self.rag_max_top_k,
+            "rag_max_context_chars": self.rag_max_context_chars,
+            "rag_max_citations": self.rag_max_citations,
+            "rag_summary_map": self.rag_summary_map,
+            "rag_digest_max_chars": self.rag_digest_max_chars,
+            "rag_map_section_chars": self.rag_map_section_chars,
+            "rag_map_max_sections": self.rag_map_max_sections,
+            "web_search_enabled": self.web_search_enabled,
+            "diagram_to_mermaid": self.diagram_to_mermaid,
+            "diagram_min_confidence": self.diagram_min_confidence,
+            "diagram_verify": self.diagram_verify,
             "chroma_db": self.chroma_db,
             "data_dir": self.data_dir,
             "chroma_cloud_api_key": _redact_secret(self.chroma_cloud_api_key),

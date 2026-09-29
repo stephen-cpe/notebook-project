@@ -97,3 +97,50 @@ class TestCleanupOrphanedContent:
             removed = cleanup_orphaned_content("fail_h")
             assert removed is False
             assert content_registry_repo.get_by_hash("fail_h") is not None
+
+    def test_removes_figure_dir_when_orphaned(
+        self, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Orphaned figure thumbnails are removed with the registry row."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        figdir = tmp_path / "figures" / ("f" * 64)
+        figdir.mkdir(parents=True)
+        (figdir / "fig-01.png").write_bytes(b"x")
+        with app.app_context():
+            from src.repositories import content_registry_repo
+
+            content_registry_repo.create_entry("f" * 64, "doc_fig", "text", 4)
+            removed = cleanup_orphaned_content("f" * 64)
+        assert removed is True
+        assert not figdir.exists()
+
+    def test_keeps_figure_dir_when_shared(
+        self, app: object, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Shared hashes keep their figure thumbnails."""
+        from src.extensions import db
+        from src.models import Notebook, Source, User
+
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        figdir = tmp_path / "figures" / ("b" * 64)
+        figdir.mkdir(parents=True)
+        (figdir / "fig-01.png").write_bytes(b"x")
+        with app.app_context():
+            u = User(username="cleanfig", password_hash="h")
+            db.session.add(u)
+            db.session.commit()
+            nb = Notebook(user_id=u.id, name="nb")
+            db.session.add(nb)
+            db.session.commit()
+            db.session.add(
+                Source(
+                    notebook_id=nb.id,
+                    filename="a",
+                    content_hash="b" * 64,
+                    content_type="txt",
+                )
+            )
+            db.session.commit()
+            removed = cleanup_orphaned_content("b" * 64)
+        assert removed is False
+        assert figdir.exists()

@@ -433,7 +433,9 @@
           if (window.ChatUI) {
             window.ChatUI.appendMessage("user", j.transcript || "");
             var assistantDiv = window.ChatUI.appendMessage("assistant", j.answer || "");
-            if (assistantDiv && j.sources) window.ChatUI.appendSources(assistantDiv, j.sources);
+            if (assistantDiv && j.sources) {
+              window.ChatUI.appendSources(assistantDiv, j.sources, j.source_total);
+            }
           }
           setTranscript("Heard: " + (r.json.transcript || ""));
           if (j.reply_audio_url) playReply(j.reply_audio_url, myGen);

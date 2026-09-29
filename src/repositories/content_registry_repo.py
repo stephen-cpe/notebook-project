@@ -63,6 +63,23 @@ def update_fingerprint(
     return entry
 
 
+def save_digest(
+    content_hash: str, section_digest: str, digest_pipeline: str
+) -> ContentRegistry | None:
+    """Persist a built section digest on an existing entry (no-op if missing).
+
+    Returns the updated entry, or ``None`` when no registry row exists yet
+    (ingestion creates the row; the digest build must never create one).
+    """
+    entry = get_by_hash(content_hash)
+    if entry is None:
+        return None
+    entry.section_digest = section_digest
+    entry.digest_pipeline = digest_pipeline
+    db.session.commit()
+    return entry
+
+
 def get_or_create(
     content_hash: str,
     chroma_collection: str,

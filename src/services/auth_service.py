@@ -150,6 +150,10 @@ class AuthUser(UserMixin):  # type: ignore[misc]
     def voice_speaker(self) -> str:
         return self._user.voice_speaker
 
+    @property
+    def difficulty(self) -> str:
+        return getattr(self._user, "difficulty", "Normal") or "Normal"
+
     def get_underlying(self) -> User:
         """Return the underlying ``User`` ORM object."""
         return self._user

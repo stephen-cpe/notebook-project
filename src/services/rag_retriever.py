@@ -41,6 +41,7 @@ class RAGRetriever:
         query: str,
         top_k: int = 5,
         filenames: dict[str, str] | None = None,
+        per_collection_k: int = 12,
     ) -> list[dict[str, Any]]:
         """Query all collections, merge by score, return top_k with provenance.
 
@@ -51,6 +52,8 @@ class RAGRetriever:
         *first uploader's* filename (shared dedup storage), so citations must
         resolve through this map — otherwise one user can see another user's
         filename, and renames never take effect.
+        ``per_collection_k`` controls per-source depth (raised from the old
+        default of 3 so large-context models actually see the document).
         """
         if not content_hashes:
             return []
@@ -61,7 +64,11 @@ class RAGRetriever:
         all_results: list[dict[str, Any]] = []
         for h in content_hashes:
             partial = self._safe_retrieve(
-                h, query, filenames=filenames, query_embedding=query_embedding
+                h,
+                query,
+                per_collection_k=per_collection_k,
+                filenames=filenames,
+                query_embedding=query_embedding,
             )
             all_results.extend(partial)
         all_results.sort(key=lambda r: r.get("score", 0.0), reverse=True)
@@ -75,7 +82,7 @@ class RAGRetriever:
         self,
         content_hash: str,
         query: str,
-        per_collection_k: int = 3,
+        per_collection_k: int = 12,
         filenames: dict[str, str] | None = None,
         query_embedding: list[float] | None = None,
     ) -> list[dict[str, Any]]:
@@ -204,14 +211,18 @@ def build_context_string(results: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
-def format_sources(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def format_sources(results: list[dict[str, Any]], limit: int | None = None) -> list[dict[str, Any]]:
     """Deduplicate sources by (filename, page) and return a clean list.
 
-    Returns ``[{filename, page}]`` with duplicates removed.
+    Returns ``[{filename, page}]`` with duplicates removed, in relevance
+    order. ``limit`` caps the visible citations (top-N); ``None`` returns
+    all. The UI shows the capped list behind a "Sources (N of M)" toggle.
     """
     seen: set[tuple[str, int | None]] = set()
     sources: list[dict[str, Any]] = []
     for r in results:
+        if limit is not None and len(sources) >= max(0, limit):
+            break
         filename = r.get("filename", "unknown")
         page = r.get("page")
         key = (filename, page)
@@ -220,6 +231,35 @@ def format_sources(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         seen.add(key)
         sources.append({"filename": filename, "page": page})
     return sources
+
+
+def build_coverage_digest(
+    source_texts: list[str],
+    max_chars: int = 6000,
+    per_source_chars: int = 1200,
+) -> str:
+    """Build an extractive overview digest from source head excerpts.
+
+    Concatenates the head of each source (deterministic, no LLM call) so the
+    chat prompt always carries document-wide context even when top-k retrieval
+    only surfaces a few chunks. Empty when there are no texts or budget.
+    """
+    if not source_texts or max_chars <= 0:
+        return ""
+    parts: list[str] = []
+    running = 0
+    for i, text in enumerate(source_texts, start=1):
+        if running >= max_chars:
+            break
+        excerpt = (text or "").strip()
+        if not excerpt:
+            continue
+        room = max_chars - running
+        share = min(per_source_chars, room)
+        chunk = excerpt[:share]
+        parts.append(f"[Document {i} overview]\n{chunk}")
+        running += len(chunk)
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
